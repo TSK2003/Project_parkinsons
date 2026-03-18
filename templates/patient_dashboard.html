@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Patient Dashboard{% endblock %}
+
+{% block content %}
+  <section class="dashboard-hero">
+    <div>
+      <span class="eyebrow">Patient dashboard</span>
+      <h1>Welcome, {{ current_user.full_name }}</h1>
+      <p class="muted">
+        Record or upload a longer voice sample, save the result to your account, and let the doctor review it from the doctor portal.
+      </p>
+    </div>
+    <div class="hero-note">
+      <strong>For better accuracy</strong>
+      <p>Use a quiet room, stay close to the microphone, and sustain "Ahh" for 8 to 10 seconds.</p>
+    </div>
+  </section>
+
+  <section class="dashboard-grid">
+    <article class="panel-card">
+      <span class="eyebrow">Create report</span>
+      <h2>Analyze and save a new voice report</h2>
+
+      <form id="analysisForm" class="stack-form" data-endpoint="{{ url_for('create_report') }}">
+        <div class="form-grid single-mobile">
+          <label class="field">
+            <span>Upload audio file</span>
+            <input id="audioFile" type="file" accept="audio/*,.wav">
+            <small>WAV works best, but most browser-supported audio files can be uploaded.</small>
+          </label>
+
+          <div class="recorder-box">
+            <span class="field-label">Or record in browser</span>
+            <div class="record-controls">
+              <button type="button" class="btn btn-secondary" id="recordStart">Start Recording</button>
+              <button type="button" class="btn btn-ghost" id="recordStop" disabled>Stop</button>
+              <span class="record-timer" id="recordTimer">00:00</span>
+            </div>
+            <audio id="recordedPreview" controls hidden></audio>
+            <small>The recorder auto-stops after 10 seconds so the backend can aggregate multiple voice windows.</small>
+          </div>
+        </div>
+
+        <div id="analysisStatus" class="inline-status">
+          No audio uploaded yet. Choose a file or record a sample to create a new report.
+        </div>
+
+        <button id="analyzeBtn" class="btn btn-primary btn-block" type="submit">Analyze and Save Report</button>
+      </form>
+    </article>
+
+    <article class="panel-card">
+      <span class="eyebrow">Latest saved report</span>
+      <h2>Most recent result</h2>
+
+      {% if latest_report %}
+        {% set report = latest_report %}
+        {% include "_report_card.html" %}
+      {% else %}
+        <div class="empty-card">
+          <h3>No saved reports yet</h3>
+          <p>Your first analysis will appear here after you upload or record a voice sample.</p>
+        </div>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel-card">
+    <div class="section-head">
+      <div>
+        <span class="eyebrow">History</span>
+        <h2>Your saved reports</h2>
+      </div>
+      <span class="badge badge-neutral">{{ reports|length }} total</span>
+    </div>
+
+    {% if reports %}
+      <div class="report-stack">
+        {% for report in reports %}
+          {% include "_report_card.html" %}
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-card">
+        <h3>No report history available</h3>
+        <p>After your first saved analysis, every report will be listed here for you and your doctor.</p>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='patient.js') }}"></script>
+{% endblock %}

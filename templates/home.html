@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Parkinson Voice Portal{% endblock %}
+
+{% block content %}
+  <section class="hero">
+    <div class="hero-copy">
+      <span class="eyebrow">Voice screening portal</span>
+      <h1>Patient login, doctor login, saved reports, and a more reliable voice analysis flow.</h1>
+      <p class="hero-text">
+        This portal now records or uploads a longer voice sample, checks audio quality, analyzes multiple segments,
+        and stores each patient report so the doctor can review patient history from a separate dashboard.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="{{ url_for('patient_login') }}">Patient Login</a>
+        <a class="btn btn-secondary" href="{{ url_for('register') }}">Patient Register</a>
+        <a class="btn btn-ghost" href="{{ url_for('doctor_login') }}">Doctor Login</a>
+      </div>
+    </div>
+
+    <div class="hero-panel">
+      <div class="stat-card">
+        <span class="stat-label">Accuracy upgrade</span>
+        <strong>Multi-segment aggregation</strong>
+        <p>Longer samples are split into overlapping voice windows and averaged for a more stable report.</p>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Role-based access</span>
+        <strong>Patients and doctors</strong>
+        <p>Patients create reports under their own login. Doctors sign in separately and review patient history.</p>
+      </div>
+      <div class="stat-card highlight">
+        <span class="stat-label">Local doctor account</span>
+        <strong>doctor / doctor123</strong>
+        <p>Use environment variables <code>DOCTOR_USERNAME</code> and <code>DOCTOR_PASSWORD</code> before deployment.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid-two">
+    <article class="panel-card">
+      <span class="eyebrow">Patient portal</span>
+      <h2>Create your account and save your own reports</h2>
+      <p class="muted">
+        Patients can register, record an 8 to 10 second sustained vowel, upload an audio sample, and save each report to their dashboard.
+      </p>
+      <ul class="feature-list">
+        <li>Patient registration and login</li>
+        <li>Voice recording in browser or file upload</li>
+        <li>Saved report history with biomarkers and segment votes</li>
+      </ul>
+      <a class="text-link" href="{{ url_for('register') }}">Create patient account</a>
+    </article>
+
+    <article class="panel-card">
+      <span class="eyebrow">Doctor portal</span>
+      <h2>Review patient list and their report history</h2>
+      <p class="muted">
+        The doctor dashboard shows all patients, report counts, latest verdicts, and a patient detail page with every stored report.
+      </p>
+      <ul class="feature-list">
+        <li>Separate doctor login</li>
+        <li>Patient list with latest result</li>
+        <li>Detailed report review per patient</li>
+      </ul>
+      <a class="text-link" href="{{ url_for('doctor_login') }}">Open doctor login</a>
+    </article>
+  </section>
+{% endblock %}

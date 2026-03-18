@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}{{ role|title }} Login{% endblock %}
+
+{% block content %}
+  <section class="auth-wrap">
+    <article class="auth-card">
+      <span class="eyebrow">{{ role|title }} access</span>
+      <h1>{{ role|title }} Login</h1>
+      <p class="muted">
+        {% if role == "doctor" %}
+          Sign in to review the patient list and saved reports.
+        {% else %}
+          Sign in to upload or record a voice sample and save your reports.
+        {% endif %}
+      </p>
+
+      <form method="post" class="stack-form">
+        <label class="field">
+          <span>Username</span>
+          <input type="text" name="username" placeholder="Enter username" required>
+        </label>
+
+        <label class="field">
+          <span>Password</span>
+          <input type="password" name="password" placeholder="Enter password" required>
+        </label>
+
+        <button class="btn btn-primary btn-block" type="submit">Login</button>
+      </form>
+
+      {% if role == "patient" %}
+        <p class="auth-footnote">Need an account? <a class="text-link" href="{{ url_for('register') }}">Register as a patient</a></p>
+      {% else %}
+        <p class="auth-footnote">Default local doctor login: <code>doctor</code> / <code>doctor123</code></p>
+      {% endif %}
+    </article>
+  </section>
+{% endblock %}

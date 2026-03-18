@@ -1,0 +1,66 @@
+<article class="report-card {% if report.prediction == 1 %}report-alert{% else %}report-ok{% endif %}">
+  <div class="report-head">
+    <div>
+      <span class="eyebrow">{{ report.created_at|dt }}</span>
+      <h3>{{ report.label }}</h3>
+      {% if report.patient_name %}
+        <p class="muted">{{ report.patient_name }} ({{ report.patient_username }})</p>
+      {% endif %}
+    </div>
+    <span class="badge {% if report.prediction == 1 %}badge-danger{% else %}badge-success{% endif %}">
+      {{ report.label }}
+    </span>
+  </div>
+
+  <p class="report-summary">{{ report.summary }}</p>
+
+  <div class="metric-grid">
+    <div class="metric-tile">
+      <span>Healthy</span>
+      <strong>{{ report.healthy_probability|pct }}</strong>
+    </div>
+    <div class="metric-tile">
+      <span>Parkinson's</span>
+      <strong>{{ report.parkinsons_probability|pct }}</strong>
+    </div>
+    <div class="metric-tile">
+      <span>Segment count</span>
+      <strong>{{ report.segment_count }}</strong>
+    </div>
+    <div class="metric-tile">
+      <span>Stability</span>
+      <strong>{{ report.stability|pct }}</strong>
+    </div>
+  </div>
+
+  <details class="details-card">
+    <summary>View biomarkers and segment votes</summary>
+
+    <div class="segment-list">
+      {% for segment in report.segment_results %}
+        <div class="segment-item">
+          <span>Segment {{ segment.segment_index }}</span>
+          <strong>{{ segment.label }}</strong>
+          <small>PD {{ segment.probabilities.parkinsons|pct }} / Healthy {{ segment.probabilities.healthy|pct }}</small>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if report.skipped_segments %}
+      <div class="skip-list">
+        {% for segment in report.skipped_segments %}
+          <p>Skipped segment {{ segment.segment_index }}: {{ segment.reason }}</p>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <div class="feature-grid">
+      {% for name, value in report.features.items() %}
+        <div class="feature-chip">
+          <span>{{ name }}</span>
+          <strong>{{ value }}</strong>
+        </div>
+      {% endfor %}
+    </div>
+  </details>
+</article>

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Doctor Dashboard{% endblock %}
+
+{% block content %}
+  <section class="dashboard-hero">
+    <div>
+      <span class="eyebrow">Doctor dashboard</span>
+      <h1>Doctor Portal</h1>
+      <p class="muted">
+        Review patient accounts, check how many reports each patient has, and open a detailed report history for any patient.
+      </p>
+    </div>
+    <div class="hero-stats">
+      <div class="mini-stat">
+        <span>Patients</span>
+        <strong>{{ patient_summaries|length }}</strong>
+      </div>
+      <div class="mini-stat">
+        <span>Reports</span>
+        <strong>{{ total_reports }}</strong>
+      </div>
+      <div class="mini-stat">
+        <span>With reports</span>
+        <strong>{{ patient_summaries|selectattr("report_count")|list|length }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel-card">
+    <div class="section-head">
+      <div>
+        <span class="eyebrow">Patients</span>
+        <h2>Patient list</h2>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient</th>
+            <th>Username</th>
+            <th>Reports</th>
+            <th>Latest verdict</th>
+            <th>Latest PD probability</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for patient in patient_summaries %}
+            <tr>
+              <td>
+                <strong>{{ patient.full_name }}</strong>
+                <small>Joined {{ patient.created_at|dt }}</small>
+              </td>
+              <td>{{ patient.username }}</td>
+              <td>{{ patient.report_count }}</td>
+              <td>{{ patient.latest_label or "No report yet" }}</td>
+              <td>{{ patient.latest_pd_probability|pct }}</td>
+              <td>
+                <a class="text-link" href="{{ url_for('doctor_patient_detail', patient_id=patient.id) }}">View reports</a>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6" class="empty-row">No patients have registered yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel-card">
+    <div class="section-head">
+      <div>
+        <span class="eyebrow">Recent activity</span>
+        <h2>Latest saved reports</h2>
+      </div>
+    </div>
+
+    {% if recent_reports %}
+      <div class="report-stack">
+        {% for report in recent_reports %}
+          {% include "_report_card.html" %}
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-card">
+        <h3>No reports saved yet</h3>
+        <p>Reports will appear here once patients start analyzing voice samples.</p>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

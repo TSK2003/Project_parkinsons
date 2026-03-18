@@ -1,58 +1,73 @@
-# Parkinson's Detection Voice API
+# Parkinson Voice Portal
 
-This project contains a Python Flask API that detects Parkinson's disease from voice features. It provides an endpoint to upload or stream audio chunks and predict if the voice belongs to a healthy person or someone with Parkinson's.
+This project is now a Flask web portal with:
 
-## How to Run the Project on Windows
+- patient registration and login
+- doctor login
+- saved patient reports in SQLite
+- doctor-side patient list and report review
+- improved voice analysis using multi-segment aggregation and stricter audio quality checks
 
-Follow these steps to set up the project locally on a Windows machine:
+## Run the project
 
-### 1. Prerequisites
-- **Python**: Make sure you have Python 3.8+ installed. You can download it from [python.org](https://www.python.org/).
-- **Git** (optional): Used to clone this repository.
+1. Create and activate a virtual environment.
+2. Install dependencies:
 
-### 2. Setup the Project
-1. Open your Command Prompt (`cmd`) or PowerShell.
-2. Navigate to the project directory where you want to run this application.
-
-### 3. Create a Virtual Environment
-It is highly recommended to use a virtual environment to keep dependencies isolated.
-
-Run the following command to create a virtual environment named `venv`:
-```cmd
-python -m venv venv
-```
-
-### 4. Activate the Virtual Environment
-Before installing packages or running the app, you need to activate the virtual environment.
-
-For **Command Prompt (cmd)**:
-```cmd
-venv\Scripts\activate.bat
-```
-
-For **PowerShell**:
-```powershell
-venv\Scripts\Activate.ps1
-```
-*(Note: If you get an execution policy error in PowerShell, you might need to run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` as Administrator once.)*
-
-Once activated, you should see `(venv)` appear on the left side of your terminal prompt.
-
-### 5. Install Dependencies
-With the virtual environment activated, install all the required Python packages using pip:
-```cmd
+```bash
 pip install -r requirements.txt
 ```
 
-### 6. Run the Application
-Finally, start the Flask development server:
-```cmd
-python app.py
+3. Start the Flask app:
+
+```bash
+python3 app.py
 ```
 
-The API will start running locally at `http://127.0.0.1:5000`. You can test it by opening `http://127.0.0.1:5000/` in your web browser.
+4. Open:
 
-### Key API Endpoints
-- `GET /` - Checks if the API is live.
-- `POST /stream-chunk` - Endpoint for streaming continuous audio chunks.
-- `POST /analyze-voice` - Endpoint for analyzing a complete audio file.
+```text
+http://127.0.0.1:5000
+```
+
+## Default local login
+
+The app seeds one doctor account on first run:
+
+- Username: `doctor`
+- Password: `doctor123`
+
+For deployment, change these with environment variables:
+
+- `DOCTOR_USERNAME`
+- `DOCTOR_PASSWORD`
+- `SECRET_KEY`
+
+## Patient flow
+
+1. Register a patient account.
+2. Log in as that patient.
+3. Upload an audio file or record 8 to 10 seconds of a steady `Ahh`.
+4. Save the generated report.
+
+## Doctor flow
+
+1. Log in with the doctor account.
+2. Open the patient list.
+3. Review each patient's saved reports and biomarkers.
+
+## API endpoints
+
+- `GET /health` - portal health check
+- `POST /analyze-voice` - analyze an uploaded audio file without saving
+- `POST /stream-chunk` - legacy single-chunk prediction endpoint
+- `POST /api/reports` - patient-only endpoint that analyzes audio and saves a report
+
+## Retrain the model
+
+Run:
+
+```bash
+python3 train_model.py
+```
+
+The training script now compares multiple classifiers with cross-validation, saves the best inference pipeline, and writes artifacts to `models/`.
