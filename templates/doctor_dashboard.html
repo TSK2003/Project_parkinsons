@@ -112,7 +112,12 @@
               <td>{{ patient.latest_label or "No report yet" }}</td>
               <td>{{ patient.latest_pd_probability|pct }}</td>
               <td>
-                <a class="text-link" href="{{ url_for('doctor_patient_detail', patient_id=patient.id) }}">Open patient</a>
+                <div class="table-actions">
+                  <a class="text-link" href="{{ url_for('doctor_patient_detail', patient_id=patient.id) }}">Open patient</a>
+                  <form method="post" action="{{ url_for('doctor_delete_patient', patient_id=patient.id) }}" onsubmit="return confirm('Remove this patient and all saved reports?');">
+                    <button class="btn btn-danger btn-compact" type="submit">Remove</button>
+                  </form>
+                </div>
               </td>
             </tr>
           {% else %}

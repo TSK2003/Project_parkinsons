@@ -13,7 +13,7 @@
     </div>
     <div class="hero-note">
       <strong>Doctor-only workflow</strong>
-      <p>Record or upload the patient's voice sample here. The patient does not need a separate login, username, or password.</p>
+      <p>Record or upload the patient's voice sample here, or let the patient log in separately with the doctor-created patient ID and password.</p>
     </div>
   </section>
 
@@ -71,7 +71,13 @@
       </div>
 
       <div class="details-card">
-        <p class="muted">Use this patient ID for doctor-side follow-up. The patient does not log in directly to this portal.</p>
+        <p class="muted">Use this patient ID for doctor-side follow-up or share it with the patient together with the doctor-created password.</p>
+      </div>
+
+      <div class="action-row">
+        <form method="post" action="{{ url_for('doctor_delete_patient', patient_id=patient.id) }}" onsubmit="return confirm('Remove this patient and all saved reports?');">
+          <button class="btn btn-danger" type="submit">Remove Patient</button>
+        </form>
       </div>
     </article>
   </section>

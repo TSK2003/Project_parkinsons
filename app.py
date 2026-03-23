@@ -415,6 +415,17 @@ def create_patient_record(full_name: str, mobile_number: str, password: str) -> 
     return get_user_by_id(cursor.lastrowid, role="patient")
 
 
+def delete_patient_record(patient_id: int) -> dict | None:
+    patient = get_user_by_id(patient_id, role="patient")
+    if patient is None:
+        return None
+
+    db = get_db()
+    db.execute("DELETE FROM users WHERE id = ? AND role = 'patient'", (patient_id,))
+    db.commit()
+    return patient
+
+
 def save_report(patient_id: int, source_filename: str, report_data: dict):
     db = get_db()
     cursor = db.execute(
@@ -901,6 +912,20 @@ def doctor_patient_detail(patient_id: int):
 
     reports = list_reports_for_patient(patient_id)
     return render_template("patient_detail.html", patient=patient, reports=reports)
+
+
+@app.route("/doctor/patient/<int:patient_id>/delete", methods=["POST"])
+@login_required(role="doctor")
+def doctor_delete_patient(patient_id: int):
+    patient = delete_patient_record(patient_id)
+    if patient is None:
+        flash("Patient account was not found.", "error")
+    else:
+        flash(
+            f"Patient {patient['full_name']} ({patient['username']}) and all saved reports were removed.",
+            "success",
+        )
+    return redirect(url_for("doctor_dashboard"))
 
 
 @app.route("/doctor/patient/<int:patient_id>/reports", methods=["POST"])

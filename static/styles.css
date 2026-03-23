@@ -470,6 +470,16 @@ code {
   color: var(--text);
 }
 
+.btn-danger {
+  background: linear-gradient(145deg, #f97316, var(--danger));
+  color: white;
+}
+
+.btn-compact {
+  padding: 9px 12px;
+  min-height: 40px;
+}
+
 .btn-block {
   width: 100%;
 }
@@ -491,6 +501,19 @@ code {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 18px;
+}
+
+.action-row,
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.table-actions form,
+.action-row form {
+  margin: 0;
 }
 
 .badge {
