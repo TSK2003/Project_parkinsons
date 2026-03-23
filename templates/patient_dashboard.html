@@ -13,7 +13,7 @@
     </div>
     <div class="hero-note">
       <strong>For better accuracy</strong>
-      <p>Use a quiet room, stay close to the microphone, and sustain "Ahh" for 8 to 10 seconds.</p>
+      <p>Use a quiet room, stay close to the microphone, and sustain "Ahh" for 8 to 10 seconds. If the app marks a report as low confidence or retake recommended, record again before relying on it.</p>
     </div>
   </section>
 
@@ -26,8 +26,8 @@
         <div class="form-grid single-mobile">
           <label class="field">
             <span>Upload audio file</span>
-            <input id="audioFile" type="file" accept="audio/*,.wav">
-            <small>WAV works best, but most browser-supported audio files can be uploaded.</small>
+            <input id="audioFile" type="file" accept=".wav,audio/wav,audio/x-wav">
+            <small>Upload a WAV file for the most reliable analysis. Browser recordings are automatically exported as WAV.</small>
           </label>
 
           <div class="recorder-box">
@@ -37,8 +37,9 @@
               <button type="button" class="btn btn-ghost" id="recordStop" disabled>Stop</button>
               <span class="record-timer" id="recordTimer">00:00</span>
             </div>
+            <canvas id="waveformCanvas" class="waveform-canvas" width="640" height="160" aria-label="Live recording waveform"></canvas>
             <audio id="recordedPreview" controls hidden></audio>
-            <small>The recorder auto-stops after 10 seconds so the backend can aggregate multiple voice windows.</small>
+            <small>The recorder auto-stops after 10 seconds, requests mono capture, disables browser audio enhancements when possible, and shows the live wave signal while recording.</small>
           </div>
         </div>
 

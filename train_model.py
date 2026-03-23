@@ -2,160 +2,731 @@ import json
 import os
 
 import joblib
+import numpy as np
 import pandas as pd
-from imblearn.over_sampling import KMeansSMOTE
-from imblearn.pipeline import Pipeline as ImbPipeline
-from sklearn.ensemble import (
-    ExtraTreesClassifier,
-    GradientBoostingClassifier,
-    RandomForestClassifier,
-)
-from sklearn.feature_selection import RFE
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+from sklearn.metrics import (
+    average_precision_score,
+    balanced_accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_recall_curve,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
+EVAL_DIR = os.path.join(MODELS_DIR, "evaluation")
+
+RANDOM_STATE = 42
+OUTER_SPLITS = 4
+INNER_SPLITS = 4
+TARGET_PD_RECALL = 0.85
+TARGET_BALANCED_ACCURACY = 0.75
+THRESHOLD_GRID = np.round(np.linspace(0.25, 0.85, 25), 3)
+
 os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(EVAL_DIR, exist_ok=True)
 
-print("=" * 64)
-print("Parkinson's Disease Training Pipeline")
-print("=" * 64)
 
-print("\n[1/6] Loading dataset...")
-df = pd.read_csv(DATA_PATH)
-df = df.drop(columns=["name"])
-X = df.drop(columns=["status"])
-y = df["status"]
-feature_names = list(X.columns)
-print(f"Dataset shape : {X.shape}")
-print(f"Class balance : Healthy={sum(y == 0)}, PD={sum(y == 1)}")
-
-print("\n[2/6] Splitting train and test sets...")
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-print("\n[3/6] Building cross-validated search pipeline...")
-feature_selector = RFE(
-    estimator=LogisticRegression(max_iter=3000, random_state=42),
-    n_features_to_select=15,
-)
-
-search_pipeline = ImbPipeline(
-    steps=[
-        ("scaler", StandardScaler()),
-        ("smote", KMeansSMOTE(random_state=42, cluster_balance_threshold=0.1)),
-        ("selector", feature_selector),
-        ("classifier", LogisticRegression(max_iter=3000, random_state=42)),
-    ]
-)
-
-param_grid = [
-    {
-        "classifier": [LogisticRegression(max_iter=3000, random_state=42)],
-        "classifier__C": [0.1, 1, 10],
-        "classifier__solver": ["lbfgs", "liblinear"],
-    },
-    {
-        "classifier": [SVC(probability=True, random_state=42)],
-        "classifier__C": [1, 10, 30],
-        "classifier__gamma": ["scale", 0.1, 0.01],
-    },
-    {
-        "classifier": [RandomForestClassifier(random_state=42)],
-        "classifier__n_estimators": [200, 400],
-        "classifier__max_depth": [None, 8, 12],
-        "classifier__min_samples_split": [2, 4],
-    },
-    {
-        "classifier": [ExtraTreesClassifier(random_state=42)],
-        "classifier__n_estimators": [300, 500],
-        "classifier__max_depth": [None, 8, 12],
-    },
-    {
-        "classifier": [GradientBoostingClassifier(random_state=42)],
-        "classifier__n_estimators": [100, 200],
-        "classifier__learning_rate": [0.05, 0.1],
-        "classifier__max_depth": [2, 3],
-    },
-]
-
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-grid = GridSearchCV(
-    estimator=search_pipeline,
-    param_grid=param_grid,
-    scoring="accuracy",
-    cv=cv,
-    n_jobs=-1,
-    verbose=0,
-    refit=True,
-)
-
-print("\n[4/6] Running model search...")
-grid.fit(X_train, y_train)
-best_pipeline = grid.best_estimator_
-best_classifier = best_pipeline.named_steps["classifier"]
-best_selector = best_pipeline.named_steps["selector"]
-best_scaler = best_pipeline.named_steps["scaler"]
-selected_mask = best_selector.support_
-selected_features = [
-    feature_names[index] for index, selected in enumerate(selected_mask) if selected
-]
-
-print(f"Best classifier : {type(best_classifier).__name__}")
-print(f"Best CV accuracy: {grid.best_score_ * 100:.2f}%")
-print("Selected features:")
-for feature in selected_features:
-    print(f"  - {feature}")
-
-print("\n[5/6] Evaluating on the holdout test set...")
-test_predictions = best_pipeline.predict(X_test)
-test_accuracy = accuracy_score(y_test, test_predictions)
-print(f"Test accuracy   : {test_accuracy * 100:.2f}%")
-print(classification_report(y_test, test_predictions, target_names=["Healthy", "Parkinson's"]))
-
-cm = confusion_matrix(y_test, test_predictions)
-print("Confusion matrix:")
-print(f"  True Healthy : {cm[0][0]}  |  False Positive : {cm[0][1]}")
-print(f"  False Negative: {cm[1][0]} |  True PD        : {cm[1][1]}")
-
-print("\n[6/6] Saving inference artifacts...")
-# Copy the fitted preprocessing stack from the best search result. This keeps
-# inference identical to the trained pipeline without applying SMOTE at runtime.
-inference_pipeline = Pipeline(
-    steps=[
-        ("scaler", best_scaler),
-        ("selector", best_selector),
-        ("classifier", best_classifier),
-    ]
-)
-
-joblib.dump(inference_pipeline, os.path.join(MODELS_DIR, "prediction_pipeline.pkl"))
-joblib.dump(best_classifier, os.path.join(MODELS_DIR, "parkinsons_model.pkl"))
-joblib.dump(best_scaler, os.path.join(MODELS_DIR, "scaler.pkl"))
-joblib.dump(best_selector, os.path.join(MODELS_DIR, "rfe_selector.pkl"))
-joblib.dump(selected_features, os.path.join(MODELS_DIR, "selected_features.pkl"))
-joblib.dump(selected_mask, os.path.join(MODELS_DIR, "selected_mask.pkl"))
-
-metadata = {
-    "best_classifier": type(best_classifier).__name__,
-    "best_params": {
-        key: str(value) if key == "classifier" else value
-        for key, value in grid.best_params_.items()
-    },
-    "cv_accuracy": round(float(grid.best_score_), 4),
-    "test_accuracy": round(float(test_accuracy), 4),
-    "selected_features": selected_features,
+FEATURE_SUBSETS = {
+    "paper_4": ["HNR", "RPDE", "DFA", "PPE"],
+    "paper_6": [
+        "MDVP:Jitter(Abs)",
+        "Jitter:DDP",
+        "MDVP:APQ",
+        "HNR",
+        "RPDE",
+        "DFA",
+        "PPE",
+    ],
+    "nonlinear_5": ["HNR", "RPDE", "DFA", "D2", "PPE"],
+    "robust_8": [
+        "MDVP:Jitter(Abs)",
+        "MDVP:APQ",
+        "HNR",
+        "RPDE",
+        "DFA",
+        "spread1",
+        "spread2",
+        "PPE",
+    ],
 }
 
-with open(os.path.join(MODELS_DIR, "model_metadata.json"), "w", encoding="utf-8") as handle:
-    json.dump(metadata, handle, indent=2)
 
-print(f"Saved artifacts to: {MODELS_DIR}")
-print("Training complete. Run python3 app.py to start the portal.")
+def build_candidate_configs() -> list[dict]:
+    return [
+        {
+            "name": "nonlinear_5_extra_trees",
+            "feature_set": "nonlinear_5",
+            "features": FEATURE_SUBSETS["nonlinear_5"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: Pipeline(
+                steps=[
+                    ("scaler", StandardScaler()),
+                    (
+                        "classifier",
+                        ExtraTreesClassifier(
+                            n_estimators=250,
+                            max_depth=None,
+                            min_samples_split=2,
+                            class_weight="balanced",
+                            random_state=RANDOM_STATE,
+                            n_jobs=-1,
+                        ),
+                    ),
+                ]
+            ),
+        },
+        {
+            "name": "paper_4_extra_trees",
+            "feature_set": "paper_4",
+            "features": FEATURE_SUBSETS["paper_4"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: Pipeline(
+                steps=[
+                    ("scaler", StandardScaler()),
+                    (
+                        "classifier",
+                        ExtraTreesClassifier(
+                            n_estimators=250,
+                            max_depth=None,
+                            min_samples_split=2,
+                            class_weight="balanced",
+                            random_state=RANDOM_STATE,
+                            n_jobs=-1,
+                        ),
+                    ),
+                ]
+            ),
+        },
+        {
+            "name": "paper_4_logreg",
+            "feature_set": "paper_4",
+            "features": FEATURE_SUBSETS["paper_4"],
+            "model_name": "LogisticRegression",
+            "build_estimator": lambda: Pipeline(
+                steps=[
+                    ("scaler", StandardScaler()),
+                    (
+                        "classifier",
+                        LogisticRegression(
+                            max_iter=5000,
+                            C=1.0,
+                            class_weight="balanced",
+                            random_state=RANDOM_STATE,
+                        ),
+                    ),
+                ]
+            ),
+        },
+        {
+            "name": "paper_6_random_forest",
+            "feature_set": "paper_6",
+            "features": FEATURE_SUBSETS["paper_6"],
+            "model_name": "RandomForestClassifier",
+            "build_estimator": lambda: Pipeline(
+                steps=[
+                    ("scaler", StandardScaler()),
+                    (
+                        "classifier",
+                        RandomForestClassifier(
+                            n_estimators=250,
+                            max_depth=None,
+                            min_samples_split=2,
+                            class_weight="balanced",
+                            random_state=RANDOM_STATE,
+                            n_jobs=-1,
+                        ),
+                    ),
+                ]
+            ),
+        },
+    ]
+
+
+def extract_subject_ids(names: pd.Series) -> pd.Series:
+    subject_ids = names.str.extract(r"^(phon_R\d+_S\d+)")[0]
+    return subject_ids.fillna(names)
+
+
+def aggregate_subject_predictions(prediction_rows: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(prediction_rows)
+    subject_level = (
+        frame.groupby("subject_id", as_index=False)
+        .agg(
+            y_true=("y_true", "first"),
+            parkinsons_probability=("parkinsons_probability", "mean"),
+            healthy_probability=("healthy_probability", "mean"),
+            threshold=("threshold", "first"),
+            recording_count=("recording_name", "count"),
+            fold=("fold", "first"),
+            candidate_name=("candidate_name", "first"),
+            feature_set=("feature_set", "first"),
+            model_name=("model_name", "first"),
+        )
+        .sort_values("subject_id")
+        .reset_index(drop=True)
+    )
+    subject_level["prediction"] = (
+        subject_level["parkinsons_probability"] >= subject_level["threshold"]
+    ).astype(int)
+    subject_level["label"] = np.where(
+        subject_level["prediction"] == 1,
+        "Parkinson's Detected",
+        "Healthy",
+    )
+    return subject_level
+
+
+def compute_subject_metrics(subject_level: pd.DataFrame) -> dict:
+    y_true = subject_level["y_true"].to_numpy()
+    y_pred = subject_level["prediction"].to_numpy()
+    y_score = subject_level["parkinsons_probability"].to_numpy()
+
+    return {
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        "pd_recall_sensitivity": float(recall_score(y_true, y_pred, pos_label=1)),
+        "healthy_recall_specificity": float(recall_score(y_true, y_pred, pos_label=0)),
+        "f1_score": float(f1_score(y_true, y_pred, pos_label=1)),
+        "roc_auc": float(roc_auc_score(y_true, y_score)),
+        "average_precision": float(average_precision_score(y_true, y_score)),
+    }
+
+
+def candidate_rank(metrics: dict) -> tuple:
+    return (
+        int(metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL),
+        round(metrics["balanced_accuracy"], 6),
+        round(metrics["pd_recall_sensitivity"], 6),
+        round(metrics["healthy_recall_specificity"], 6),
+        round(metrics["f1_score"], 6),
+    )
+
+
+def threshold_rank(metrics: dict) -> tuple:
+    feasible = (
+        metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL
+        and metrics["balanced_accuracy"] >= TARGET_BALANCED_ACCURACY
+    )
+    recall_feasible = metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL
+    return (
+        int(feasible),
+        int(recall_feasible),
+        round(metrics["balanced_accuracy"], 6),
+        round(metrics["healthy_recall_specificity"], 6),
+        round(metrics["f1_score"], 6),
+        round(metrics["pd_recall_sensitivity"], 6),
+    )
+
+
+def tune_threshold(subject_probabilities: pd.DataFrame) -> dict:
+    best = None
+    for threshold in THRESHOLD_GRID:
+        candidate_frame = subject_probabilities.copy()
+        candidate_frame["threshold"] = float(threshold)
+        candidate_frame["prediction"] = (
+            candidate_frame["parkinsons_probability"] >= threshold
+        ).astype(int)
+        metrics = compute_subject_metrics(candidate_frame)
+        candidate = {
+            "threshold": float(threshold),
+            "metrics": metrics,
+        }
+        if best is None or threshold_rank(metrics) > threshold_rank(best["metrics"]):
+            best = candidate
+    return best
+
+
+def evaluate_candidate_with_inner_cv(
+    candidate: dict,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    groups_train: pd.Series,
+) -> dict:
+    inner_cv = StratifiedGroupKFold(
+        n_splits=INNER_SPLITS,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+
+    rows = []
+    for inner_fold, (inner_train_index, inner_valid_index) in enumerate(
+        inner_cv.split(X_train, y_train, groups=groups_train),
+        start=1,
+    ):
+        estimator = candidate["build_estimator"]()
+        estimator.fit(
+            X_train.iloc[inner_train_index][candidate["features"]],
+            y_train.iloc[inner_train_index],
+        )
+        probabilities = estimator.predict_proba(
+            X_train.iloc[inner_valid_index][candidate["features"]]
+        )[:, 1]
+
+        for subject_id, y_true, pd_probability in zip(
+            groups_train.iloc[inner_valid_index],
+            y_train.iloc[inner_valid_index],
+            probabilities,
+        ):
+            rows.append(
+                {
+                    "subject_id": subject_id,
+                    "recording_name": f"inner_fold_{inner_fold}",
+                    "y_true": int(y_true),
+                    "parkinsons_probability": float(pd_probability),
+                    "healthy_probability": float(1.0 - pd_probability),
+                    "threshold": 0.5,
+                    "fold": inner_fold,
+                    "candidate_name": candidate["name"],
+                    "feature_set": candidate["feature_set"],
+                    "model_name": candidate["model_name"],
+                }
+            )
+
+    subject_probabilities = aggregate_subject_predictions(rows)
+    threshold_choice = tune_threshold(subject_probabilities)
+
+    return {
+        "candidate_name": candidate["name"],
+        "feature_set": candidate["feature_set"],
+        "features": candidate["features"],
+        "model_name": candidate["model_name"],
+        "threshold": threshold_choice["threshold"],
+        "inner_subject_metrics": threshold_choice["metrics"],
+    }
+
+
+def write_curve_csv(
+    file_path: str,
+    column_a: str,
+    values_a: np.ndarray,
+    column_b: str,
+    values_b: np.ndarray,
+) -> None:
+    pd.DataFrame({column_a: values_a, column_b: values_b}).to_csv(file_path, index=False)
+
+
+def write_line_chart_svg(
+    file_path: str,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    title: str,
+    x_label: str,
+    y_label: str,
+    baseline: float | None = None,
+    diagonal_reference: bool = False,
+) -> None:
+    width = 720
+    height = 520
+    left = 80
+    right = 30
+    top = 50
+    bottom = 80
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    def project(x_val: float, y_val: float) -> tuple[float, float]:
+        x_pos = left + (float(x_val) * plot_width)
+        y_pos = top + ((1.0 - float(y_val)) * plot_height)
+        return x_pos, y_pos
+
+    points = " ".join(
+        f"{x_pos:.2f},{y_pos:.2f}"
+        for x_pos, y_pos in (project(x, y) for x, y in zip(x_values, y_values))
+    )
+
+    tick_lines = []
+    tick_labels = []
+    for tick in np.linspace(0, 1, 6):
+        x_tick, _ = project(tick, 0)
+        _, y_tick = project(0, tick)
+        tick_lines.append(
+            f'<line x1="{x_tick:.2f}" y1="{top}" x2="{x_tick:.2f}" y2="{top + plot_height}" '
+            'stroke="#e5e7eb" stroke-width="1" />'
+        )
+        tick_lines.append(
+            f'<line x1="{left}" y1="{y_tick:.2f}" x2="{left + plot_width}" y2="{y_tick:.2f}" '
+            'stroke="#e5e7eb" stroke-width="1" />'
+        )
+        tick_labels.append(
+            f'<text x="{x_tick:.2f}" y="{height - 45}" text-anchor="middle" '
+            'font-size="12" fill="#475569">{tick:.1f}</text>'
+        )
+        tick_labels.append(
+            f'<text x="{left - 16}" y="{y_tick + 4:.2f}" text-anchor="end" '
+            'font-size="12" fill="#475569">{tick:.1f}</text>'
+        )
+
+    baseline_line = ""
+    if baseline is not None:
+        x_start, y_start = project(0.0, baseline)
+        x_end, y_end = project(1.0, baseline)
+        baseline_line = (
+            f'<line x1="{x_start:.2f}" y1="{y_start:.2f}" '
+            f'x2="{x_end:.2f}" y2="{y_end:.2f}" '
+            'stroke="#f59e0b" stroke-width="2" stroke-dasharray="8 6" />'
+        )
+
+    diagonal_line = ""
+    if diagonal_reference:
+        x_start, y_start = project(0.0, 0.0)
+        x_end, y_end = project(1.0, 1.0)
+        diagonal_line = (
+            f'<line x1="{x_start:.2f}" y1="{y_start:.2f}" '
+            f'x2="{x_end:.2f}" y2="{y_end:.2f}" '
+            'stroke="#94a3b8" stroke-width="2" stroke-dasharray="8 6" />'
+        )
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <rect width="{width}" height="{height}" fill="#ffffff" />
+  <text x="{width / 2:.0f}" y="28" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">{title}</text>
+  {''.join(tick_lines)}
+  <line x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}" stroke="#0f172a" stroke-width="2" />
+  <line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" stroke="#0f172a" stroke-width="2" />
+  {diagonal_line}
+  {baseline_line}
+  <polyline fill="none" stroke="#14746f" stroke-width="4" points="{points}" />
+  {''.join(tick_labels)}
+  <text x="{width / 2:.0f}" y="{height - 12}" text-anchor="middle" font-size="16" fill="#0f172a">{x_label}</text>
+  <text x="24" y="{height / 2:.0f}" text-anchor="middle" font-size="16" fill="#0f172a" transform="rotate(-90 24 {height / 2:.0f})">{y_label}</text>
+</svg>
+"""
+
+    with open(file_path, "w", encoding="utf-8") as handle:
+        handle.write(svg)
+
+
+def write_confusion_matrix_artifacts(file_stem: str, matrix: np.ndarray) -> None:
+    with open(f"{file_stem}.json", "w", encoding="utf-8") as handle:
+        json.dump({"labels": ["Healthy", "Parkinson's"], "matrix": matrix.tolist()}, handle, indent=2)
+
+    width = 520
+    height = 420
+    start_x = 150
+    start_y = 120
+    cell_size = 110
+    flat_max = max(int(matrix.max()), 1)
+    labels = ["Healthy", "Parkinson's"]
+
+    cells = []
+    for row_index in range(2):
+        for column_index in range(2):
+            value = int(matrix[row_index, column_index])
+            intensity = 0.15 + (0.75 * (value / flat_max))
+            fill = f"rgba(20, 116, 111, {intensity:.3f})"
+            x_pos = start_x + (column_index * cell_size)
+            y_pos = start_y + (row_index * cell_size)
+            cells.append(
+                f'<rect x="{x_pos}" y="{y_pos}" width="{cell_size}" height="{cell_size}" '
+                f'fill="{fill}" stroke="#0f172a" stroke-width="1.5" />'
+            )
+            cells.append(
+                f'<text x="{x_pos + cell_size / 2:.1f}" y="{y_pos + cell_size / 2 + 8:.1f}" '
+                'text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">'
+                f"{value}</text>"
+            )
+
+    x_labels = "".join(
+        f'<text x="{start_x + (index * cell_size) + (cell_size / 2):.1f}" y="{start_y - 18}" '
+        'text-anchor="middle" font-size="16" fill="#0f172a">'
+        f"{label}</text>"
+        for index, label in enumerate(labels)
+    )
+    y_labels = "".join(
+        f'<text x="{start_x - 18}" y="{start_y + (index * cell_size) + (cell_size / 2) + 6:.1f}" '
+        'text-anchor="end" font-size="16" fill="#0f172a">'
+        f"{label}</text>"
+        for index, label in enumerate(labels)
+    )
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <rect width="{width}" height="{height}" fill="#ffffff" />
+  <text x="{width / 2:.0f}" y="38" text-anchor="middle" font-size="24" font-weight="700" fill="#0f172a">Subject-Level Confusion Matrix</text>
+  <text x="{start_x + cell_size:.0f}" y="86" text-anchor="middle" font-size="18" fill="#0f172a">Predicted label</text>
+  <text x="44" y="{start_y + cell_size:.0f}" text-anchor="middle" font-size="18" fill="#0f172a" transform="rotate(-90 44 {start_y + cell_size:.0f})">True label</text>
+  {x_labels}
+  {y_labels}
+  {''.join(cells)}
+</svg>
+"""
+
+    with open(f"{file_stem}.svg", "w", encoding="utf-8") as handle:
+        handle.write(svg)
+
+
+def print_metric_block(title: str, metrics: dict) -> None:
+    print(f"\n{title}")
+    print("-" * len(title))
+    print(f"Balanced accuracy      : {metrics['balanced_accuracy']:.4f}")
+    print(f"PD recall (sensitivity): {metrics['pd_recall_sensitivity']:.4f}")
+    print(f"Healthy recall         : {metrics['healthy_recall_specificity']:.4f}")
+    print(f"F1 score               : {metrics['f1_score']:.4f}")
+    print(f"ROC AUC                : {metrics['roc_auc']:.4f}")
+    print(f"Average precision      : {metrics['average_precision']:.4f}")
+    print(
+        "Goal targets           : "
+        f"PD recall {'PASS' if metrics['pd_recall_sensitivity'] >= TARGET_PD_RECALL else 'FAIL'}, "
+        f"balanced accuracy {'PASS' if metrics['balanced_accuracy'] >= TARGET_BALANCED_ACCURACY else 'FAIL'}"
+    )
+
+
+def main() -> None:
+    print("=" * 72)
+    print("Parkinson's Disease Training Pipeline - Subset + Threshold Tuning")
+    print("=" * 72)
+
+    print("\n[1/7] Loading dataset and deriving subject groups...")
+    df = pd.read_csv(DATA_PATH)
+    df["subject_id"] = extract_subject_ids(df["name"])
+    subject_status = df.groupby("subject_id")["status"].first()
+
+    print(f"Recording count        : {len(df)}")
+    print(f"Feature count          : {len(df.columns) - 3}")
+    print(f"Subject count          : {subject_status.shape[0]}")
+    print(f"Healthy subjects       : {int((subject_status == 0).sum())}")
+    print(f"Parkinson's subjects   : {int((subject_status == 1).sum())}")
+
+    feature_names = [column for column in df.columns if column not in {"name", "status", "subject_id"}]
+    X = df[feature_names]
+    y = df["status"]
+    groups = df["subject_id"]
+
+    candidate_configs = build_candidate_configs()
+
+    print("\n[2/7] Running nested grouped validation with threshold tuning...")
+    outer_cv = StratifiedGroupKFold(
+        n_splits=OUTER_SPLITS,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+
+    outer_prediction_rows: list[dict] = []
+    fold_summaries: list[dict] = []
+
+    for fold_index, (train_index, test_index) in enumerate(
+        outer_cv.split(X, y, groups=groups),
+        start=1,
+    ):
+        X_train = X.iloc[train_index]
+        y_train = y.iloc[train_index]
+        groups_train = groups.iloc[train_index]
+        X_test = X.iloc[test_index]
+        y_test = y.iloc[test_index]
+        groups_test = groups.iloc[test_index]
+        names_test = df.iloc[test_index]["name"]
+
+        candidate_results = []
+        for candidate in candidate_configs:
+            result = evaluate_candidate_with_inner_cv(candidate, X_train, y_train, groups_train)
+            candidate_results.append(result)
+
+        best_candidate = max(candidate_results, key=lambda item: candidate_rank(item["inner_subject_metrics"]))
+        estimator_template = next(
+            candidate for candidate in candidate_configs if candidate["name"] == best_candidate["candidate_name"]
+        )
+        final_fold_estimator = estimator_template["build_estimator"]()
+        final_fold_estimator.fit(X_train[best_candidate["features"]], y_train)
+        test_probabilities = final_fold_estimator.predict_proba(X_test[best_candidate["features"]])[:, 1]
+
+        for recording_name, subject_id, y_true, pd_probability in zip(
+            names_test,
+            groups_test,
+            y_test,
+            test_probabilities,
+        ):
+            outer_prediction_rows.append(
+                {
+                    "recording_name": recording_name,
+                    "subject_id": subject_id,
+                    "y_true": int(y_true),
+                    "parkinsons_probability": float(pd_probability),
+                    "healthy_probability": float(1.0 - pd_probability),
+                    "threshold": float(best_candidate["threshold"]),
+                    "fold": fold_index,
+                    "candidate_name": best_candidate["candidate_name"],
+                    "feature_set": best_candidate["feature_set"],
+                    "model_name": best_candidate["model_name"],
+                }
+            )
+
+        fold_subjects = aggregate_subject_predictions(
+            [row for row in outer_prediction_rows if row["fold"] == fold_index]
+        )
+        fold_metrics = compute_subject_metrics(fold_subjects)
+        fold_summary = {
+            "fold": fold_index,
+            "best_candidate": best_candidate["candidate_name"],
+            "feature_set": best_candidate["feature_set"],
+            "model_name": best_candidate["model_name"],
+            "threshold": round(float(best_candidate["threshold"]), 4),
+            "inner_subject_metrics": {
+                key: round(value, 4)
+                for key, value in best_candidate["inner_subject_metrics"].items()
+            },
+            "outer_subject_metrics": {
+                key: round(value, 4)
+                for key, value in fold_metrics.items()
+            },
+        }
+        fold_summaries.append(fold_summary)
+
+        print(
+            f"  Fold {fold_index}: {best_candidate['candidate_name']} | "
+            f"threshold={best_candidate['threshold']:.3f} | "
+            f"balanced_accuracy={fold_metrics['balanced_accuracy']:.4f} | "
+            f"pd_recall={fold_metrics['pd_recall_sensitivity']:.4f}"
+        )
+
+    print("\n[3/7] Aggregating outer-fold predictions at subject level...")
+    recording_eval = pd.DataFrame(outer_prediction_rows).sort_values(
+        ["fold", "subject_id", "recording_name"]
+    )
+    recording_eval.to_csv(
+        os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv"),
+        index=False,
+    )
+
+    subject_eval = aggregate_subject_predictions(outer_prediction_rows)
+    subject_eval.to_csv(
+        os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv"),
+        index=False,
+    )
+
+    subject_metrics = compute_subject_metrics(subject_eval)
+    print_metric_block("Subject-Level Out-of-Fold Metrics", subject_metrics)
+
+    print("\n[4/7] Writing evaluation artifacts...")
+    subject_y_true = subject_eval["y_true"].to_numpy()
+    subject_y_pred = subject_eval["prediction"].to_numpy()
+    subject_y_score = subject_eval["parkinsons_probability"].to_numpy()
+
+    subject_cm = confusion_matrix(subject_y_true, subject_y_pred, labels=[0, 1])
+    write_confusion_matrix_artifacts(
+        os.path.join(EVAL_DIR, "subject_confusion_matrix"),
+        subject_cm,
+    )
+
+    fpr, tpr, _ = roc_curve(subject_y_true, subject_y_score)
+    precision, recall, _ = precision_recall_curve(subject_y_true, subject_y_score)
+    write_curve_csv(os.path.join(EVAL_DIR, "roc_curve.csv"), "fpr", fpr, "tpr", tpr)
+    write_curve_csv(
+        os.path.join(EVAL_DIR, "precision_recall_curve.csv"),
+        "recall",
+        recall,
+        "precision",
+        precision,
+    )
+    write_line_chart_svg(
+        os.path.join(EVAL_DIR, "roc_curve.svg"),
+        x_values=fpr,
+        y_values=tpr,
+        title="Subject-Level ROC Curve",
+        x_label="False Positive Rate",
+        y_label="True Positive Rate",
+        diagonal_reference=True,
+    )
+    write_line_chart_svg(
+        os.path.join(EVAL_DIR, "precision_recall_curve.svg"),
+        x_values=recall,
+        y_values=precision,
+        title="Subject-Level Precision-Recall Curve",
+        x_label="Recall",
+        y_label="Precision",
+        baseline=float(subject_y_true.mean()),
+    )
+
+    print("\n[5/7] Choosing the final model and threshold on all subjects...")
+    final_candidate_results = []
+    for candidate in candidate_configs:
+        final_candidate_results.append(
+            evaluate_candidate_with_inner_cv(candidate, X, y, groups)
+        )
+
+    final_choice = max(
+        final_candidate_results,
+        key=lambda item: candidate_rank(item["inner_subject_metrics"]),
+    )
+    final_config = next(
+        candidate for candidate in candidate_configs if candidate["name"] == final_choice["candidate_name"]
+    )
+    final_estimator = final_config["build_estimator"]()
+    final_estimator.fit(X[final_choice["features"]], y)
+
+    print(f"Best candidate          : {final_choice['candidate_name']}")
+    print(f"Feature set             : {final_choice['feature_set']}")
+    print(f"Model                   : {final_choice['model_name']}")
+    print(f"Decision threshold      : {final_choice['threshold']:.3f}")
+    print("Selected features:")
+    for feature in final_choice["features"]:
+        print(f"  - {feature}")
+
+    print("\n[6/7] Saving inference artifacts...")
+    joblib.dump(final_estimator, os.path.join(MODELS_DIR, "prediction_pipeline.pkl"))
+    joblib.dump(final_estimator.named_steps["classifier"], os.path.join(MODELS_DIR, "parkinsons_model.pkl"))
+    joblib.dump(final_estimator.named_steps["scaler"], os.path.join(MODELS_DIR, "scaler.pkl"))
+    joblib.dump(final_choice["features"], os.path.join(MODELS_DIR, "selected_features.pkl"))
+
+    metadata = {
+        "training_mode": "subject_grouped_subset_threshold_tuning",
+        "scoring_metric": "balanced_accuracy_with_pd_recall_target",
+        "outer_splits": OUTER_SPLITS,
+        "inner_splits": INNER_SPLITS,
+        "decision_threshold": round(float(final_choice["threshold"]), 4),
+        "target_pd_recall": TARGET_PD_RECALL,
+        "target_balanced_accuracy": TARGET_BALANCED_ACCURACY,
+        "best_candidate": final_choice["candidate_name"],
+        "feature_set_name": final_choice["feature_set"],
+        "best_classifier": final_choice["model_name"],
+        "selected_features": final_choice["features"],
+        "subject_level_oof_metrics": {
+            key: round(value, 4)
+            for key, value in subject_metrics.items()
+        },
+        "final_candidate_inner_metrics": {
+            key: round(value, 4)
+            for key, value in final_choice["inner_subject_metrics"].items()
+        },
+        "evaluation_artifacts": {
+            "recording_level_oof_predictions": os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv"),
+            "subject_level_oof_predictions": os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv"),
+            "subject_confusion_matrix_json": os.path.join(EVAL_DIR, "subject_confusion_matrix.json"),
+            "subject_confusion_matrix_svg": os.path.join(EVAL_DIR, "subject_confusion_matrix.svg"),
+            "roc_curve_csv": os.path.join(EVAL_DIR, "roc_curve.csv"),
+            "roc_curve_svg": os.path.join(EVAL_DIR, "roc_curve.svg"),
+            "precision_recall_curve_csv": os.path.join(EVAL_DIR, "precision_recall_curve.csv"),
+            "precision_recall_curve_svg": os.path.join(EVAL_DIR, "precision_recall_curve.svg"),
+        },
+        "fold_summaries": fold_summaries,
+        "final_candidate_results": [
+            {
+                "candidate_name": item["candidate_name"],
+                "feature_set": item["feature_set"],
+                "model_name": item["model_name"],
+                "threshold": round(float(item["threshold"]), 4),
+                "inner_subject_metrics": {
+                    key: round(value, 4)
+                    for key, value in item["inner_subject_metrics"].items()
+                },
+            }
+            for item in final_candidate_results
+        ],
+    }
+
+    with open(os.path.join(MODELS_DIR, "model_metadata.json"), "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2)
+
+    print("\n[7/7] Saved final model, subset, and tuned threshold.")
+    print(f"Model artifacts         : {MODELS_DIR}")
+    print(f"Evaluation artifacts    : {EVAL_DIR}")
+
+
+if __name__ == "__main__":
+    main()

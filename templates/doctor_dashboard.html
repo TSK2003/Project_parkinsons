@@ -8,7 +8,7 @@
       <span class="eyebrow">Doctor dashboard</span>
       <h1>Doctor Portal</h1>
       <p class="muted">
-        Review patient accounts, check how many reports each patient has, and open a detailed report history for any patient.
+        Create patient IDs, review saved voice reports, and open any patient record to upload or record a new screening sample.
       </p>
     </div>
     <div class="hero-stats">
@@ -27,6 +27,57 @@
     </div>
   </section>
 
+  <section class="dashboard-grid">
+    <article class="panel-card">
+      <span class="eyebrow">Patient onboarding</span>
+      <h2>Create a new patient ID</h2>
+      <p class="muted">
+        The portal generates the patient ID from the first 4 letters of the patient's name and the last 4 digits of the mobile number. You choose the patient password here.
+      </p>
+
+      <form method="post" action="{{ url_for('doctor_create_patient') }}" class="stack-form">
+        <div class="form-grid single-mobile">
+          <label class="field">
+            <span>Patient full name</span>
+            <input type="text" name="full_name" placeholder="Enter patient name" required>
+          </label>
+
+          <label class="field">
+            <span>Mobile number</span>
+            <input type="text" name="mobile_number" inputmode="numeric" pattern="[0-9\\s\\-\\+]{10,}" placeholder="Enter mobile number" required>
+          </label>
+
+          <label class="field">
+            <span>Password</span>
+            <input type="password" name="password" placeholder="Create patient password" minlength="6" required>
+          </label>
+
+          <label class="field">
+            <span>Confirm password</span>
+            <input type="password" name="confirm_password" placeholder="Confirm patient password" minlength="6" required>
+          </label>
+        </div>
+
+        <div class="inline-status is-working">
+          Example: <code>Naveen Kumar</code> with <code>9876543210</code> becomes patient ID <code>nave3210</code>. The patient will use that ID and the password you set here to log in.
+        </div>
+
+        <button class="btn btn-primary" type="submit">Create Patient ID</button>
+      </form>
+    </article>
+
+    <article class="panel-card">
+      <span class="eyebrow">Recording guidance</span>
+      <h2>Capture cleaner screening audio</h2>
+      <ul class="feature-list">
+        <li>Use a quiet room and keep the phone close to the patient.</li>
+        <li>Record a steady 8 to 10 second sustained "Ahh".</li>
+        <li>The live waveform should move while the patient is speaking.</li>
+        <li>Retake any sample marked low confidence or retake recommended.</li>
+      </ul>
+    </article>
+  </section>
+
   <section class="panel-card">
     <div class="section-head">
       <div>
@@ -40,7 +91,8 @@
         <thead>
           <tr>
             <th>Patient</th>
-            <th>Username</th>
+            <th>Patient ID</th>
+            <th>Mobile</th>
             <th>Reports</th>
             <th>Latest verdict</th>
             <th>Latest PD probability</th>
@@ -55,16 +107,17 @@
                 <small>Joined {{ patient.created_at|dt }}</small>
               </td>
               <td>{{ patient.username }}</td>
+              <td>{{ patient.mobile_number or "-" }}</td>
               <td>{{ patient.report_count }}</td>
               <td>{{ patient.latest_label or "No report yet" }}</td>
               <td>{{ patient.latest_pd_probability|pct }}</td>
               <td>
-                <a class="text-link" href="{{ url_for('doctor_patient_detail', patient_id=patient.id) }}">View reports</a>
+                <a class="text-link" href="{{ url_for('doctor_patient_detail', patient_id=patient.id) }}">Open patient</a>
               </td>
             </tr>
           {% else %}
             <tr>
-              <td colspan="6" class="empty-row">No patients have registered yet.</td>
+              <td colspan="7" class="empty-row">No patients have been created yet.</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -89,7 +142,7 @@
     {% else %}
       <div class="empty-card">
         <h3>No reports saved yet</h3>
-        <p>Reports will appear here once patients start analyzing voice samples.</p>
+        <p>Reports will appear here once the doctor records or uploads a patient's voice sample.</p>
       </div>
     {% endif %}
   </section>

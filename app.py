@@ -33,6 +33,7 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 DATABASE_PATH = os.path.join(DATA_DIR, "portal.db")
 
 MODEL_PIPELINE_PATH = os.path.join(MODELS_DIR, "prediction_pipeline.pkl")
+MODEL_METADATA_PATH = os.path.join(MODELS_DIR, "model_metadata.json")
 LEGACY_MODEL_PATH = os.path.join(MODELS_DIR, "parkinsons_model.pkl")
 LEGACY_SCALER_PATH = os.path.join(MODELS_DIR, "scaler.pkl")
 LEGACY_RFE_PATH = os.path.join(MODELS_DIR, "rfe_selector.pkl")
@@ -69,12 +70,31 @@ app.config["SEGMENT_SECONDS"] = float(os.environ.get("SEGMENT_SECONDS", "3.0"))
 app.config["SEGMENT_OVERLAP_SECONDS"] = float(
     os.environ.get("SEGMENT_OVERLAP_SECONDS", "1.0")
 )
+app.config["MIN_VALID_SEGMENTS"] = int(os.environ.get("MIN_VALID_SEGMENTS", "2"))
+app.config["MAX_SKIPPED_SEGMENT_RATIO"] = float(
+    os.environ.get("MAX_SKIPPED_SEGMENT_RATIO", "0.34")
+)
+app.config["MIN_SEGMENT_STABILITY"] = float(
+    os.environ.get("MIN_SEGMENT_STABILITY", "0.70")
+)
+app.config["MIN_CONFIDENCE_GAP"] = float(
+    os.environ.get("MIN_CONFIDENCE_GAP", "0.18")
+)
 CORS(app)
 
 prediction_pipeline = None
 legacy_model = None
 legacy_scaler = None
 legacy_rfe_selector = None
+model_metadata = {}
+selected_model_features = ALL_FEATURES
+prediction_threshold = 0.5
+
+if os.path.exists(MODEL_METADATA_PATH):
+    with open(MODEL_METADATA_PATH, "r", encoding="utf-8") as handle:
+        model_metadata = json.load(handle)
+    selected_model_features = model_metadata.get("selected_features", ALL_FEATURES)
+    prediction_threshold = float(model_metadata.get("decision_threshold", 0.5))
 
 if os.path.exists(MODEL_PIPELINE_PATH):
     prediction_pipeline = joblib.load(MODEL_PIPELINE_PATH)
@@ -114,8 +134,9 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             full_name TEXT NOT NULL,
+            mobile_number TEXT,
             username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
+            password_hash TEXT,
             role TEXT NOT NULL CHECK(role IN ('patient', 'doctor')),
             created_at TEXT NOT NULL
         );
@@ -135,13 +156,53 @@ def init_db() -> None:
             features_json TEXT NOT NULL,
             segment_results_json TEXT NOT NULL,
             skipped_segments_json TEXT NOT NULL DEFAULT '[]',
+            quality_status TEXT NOT NULL DEFAULT 'accepted',
+            needs_retake INTEGER NOT NULL DEFAULT 0,
+            quality_flags_json TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL,
             FOREIGN KEY(patient_id) REFERENCES users(id) ON DELETE CASCADE
         );
         """
     )
+    ensure_user_columns()
+    ensure_report_columns()
     db.commit()
     ensure_default_doctor()
+
+
+def ensure_user_columns() -> None:
+    db = get_db()
+    columns = {
+        row["name"]
+        for row in db.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "mobile_number" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN mobile_number TEXT")
+
+
+def ensure_report_columns() -> None:
+    db = get_db()
+    columns = {
+        row["name"]
+        for row in db.execute("PRAGMA table_info(reports)").fetchall()
+    }
+    missing_columns = [
+        (
+            "quality_status",
+            "TEXT NOT NULL DEFAULT 'accepted'",
+        ),
+        (
+            "needs_retake",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "quality_flags_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        ),
+    ]
+    for column_name, column_sql in missing_columns:
+        if column_name not in columns:
+            db.execute(f"ALTER TABLE reports ADD COLUMN {column_name} {column_sql}")
 
 
 def ensure_default_doctor() -> None:
@@ -156,11 +217,12 @@ def ensure_default_doctor() -> None:
     doctor_password = os.environ.get("DOCTOR_PASSWORD", "doctor123")
     db.execute(
         """
-        INSERT INTO users (full_name, username, password_hash, role, created_at)
-        VALUES (?, ?, ?, 'doctor', ?)
+        INSERT INTO users (full_name, mobile_number, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, 'doctor', ?)
         """,
         (
             "Dr. Portal",
+            None,
             doctor_username,
             generate_password_hash(doctor_password),
             utc_now(),
@@ -210,6 +272,9 @@ def hydrate_report(row):
     report["skipped_segments"] = json.loads(
         report.pop("skipped_segments_json") or "[]"
     )
+    report["quality_flags"] = json.loads(report.pop("quality_flags_json", "[]") or "[]")
+    report["quality_status"] = report.get("quality_status") or "accepted"
+    report["needs_retake"] = bool(report.get("needs_retake", 0))
     return report
 
 
@@ -263,6 +328,7 @@ def list_patient_summaries():
         SELECT
             users.id,
             users.full_name,
+            users.mobile_number,
             users.username,
             users.created_at,
             COUNT(reports.id) AS report_count,
@@ -298,16 +364,55 @@ def list_patient_summaries():
     return [dict(row) for row in rows]
 
 
-def create_patient_user(full_name: str, username: str, password: str) -> None:
+def normalize_mobile_number(mobile_number: str) -> str:
+    return "".join(character for character in mobile_number if character.isdigit())
+
+
+def generate_patient_identifier(full_name: str, mobile_number: str) -> str:
+    cleaned_name = "".join(
+        character for character in full_name.lower() if character.isalnum()
+    )
+    prefix = (cleaned_name[:4] or "patn").ljust(4, "x")
+    return f"{prefix}{mobile_number[-4:]}"
+
+
+def create_patient_record(full_name: str, mobile_number: str, password: str) -> dict:
+    cleaned_name = " ".join(full_name.split())
+    if not cleaned_name:
+        raise ValueError("Patient name is required.")
+
+    normalized_mobile = normalize_mobile_number(mobile_number)
+    if len(normalized_mobile) < 10:
+        raise ValueError("Mobile number must contain at least 10 digits.")
+    if len(password) < 6:
+        raise ValueError("Patient password must be at least 6 characters long.")
+
+    patient_identifier = generate_patient_identifier(cleaned_name, normalized_mobile)
     db = get_db()
-    db.execute(
+    existing_patient = db.execute(
+        "SELECT id FROM users WHERE username = ? LIMIT 1",
+        (patient_identifier,),
+    ).fetchone()
+    if existing_patient is not None:
+        raise ValueError(
+            "That generated patient ID already exists. Please verify the name and mobile number."
+        )
+
+    cursor = db.execute(
         """
-        INSERT INTO users (full_name, username, password_hash, role, created_at)
-        VALUES (?, ?, ?, 'patient', ?)
+        INSERT INTO users (full_name, mobile_number, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, 'patient', ?)
         """,
-        (full_name, username, generate_password_hash(password), utc_now()),
+        (
+            cleaned_name,
+            normalized_mobile,
+            patient_identifier,
+            generate_password_hash(password),
+            utc_now(),
+        ),
     )
     db.commit()
+    return get_user_by_id(cursor.lastrowid, role="patient")
 
 
 def save_report(patient_id: int, source_filename: str, report_data: dict):
@@ -328,9 +433,12 @@ def save_report(patient_id: int, source_filename: str, report_data: dict):
             features_json,
             segment_results_json,
             skipped_segments_json,
+            quality_status,
+            needs_retake,
+            quality_flags_json,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             patient_id,
@@ -346,6 +454,9 @@ def save_report(patient_id: int, source_filename: str, report_data: dict):
             json.dumps(report_data["features"]),
             json.dumps(report_data["segment_results"]),
             json.dumps(report_data["skipped_segments"]),
+            report_data["quality_status"],
+            int(report_data["needs_retake"]),
+            json.dumps(report_data["quality_flags"]),
             utc_now(),
         ),
     )
@@ -408,8 +519,9 @@ def login_required(role: str | None = None):
 
 def infer_prediction(feature_frame):
     if prediction_pipeline is not None:
-        prediction = int(prediction_pipeline.predict(feature_frame)[0])
-        probabilities = prediction_pipeline.predict_proba(feature_frame)[0]
+        model_frame = feature_frame[selected_model_features]
+        probabilities = prediction_pipeline.predict_proba(model_frame)[0]
+        prediction = int(float(probabilities[1]) >= prediction_threshold)
         return prediction, probabilities
 
     scaled_vector = legacy_scaler.transform(feature_frame)
@@ -480,6 +592,8 @@ def build_report_summary(
     stability: float,
     valid_segments: int,
     skipped_segments: list[dict],
+    quality_status: str,
+    quality_flags: list[str],
 ) -> str:
     confidence = parkinsons_probability if prediction == 1 else healthy_probability
     strength = "high" if confidence >= 0.8 and stability >= 0.7 else "moderate"
@@ -488,12 +602,70 @@ def build_report_summary(
     if skipped_segments:
         skipped_note = f" {len(skipped_segments)} low-quality segment(s) were skipped."
 
+    quality_note = ""
+    if quality_status == "retake":
+        quality_note = (
+            " Recording quality was not strong enough for a reliable screen. "
+            "Please retake the sample before relying on this result."
+        )
+    elif quality_status == "uncertain":
+        quality_note = " This screen is low confidence. A repeat recording is recommended."
+    if quality_flags:
+        quality_note += " Reasons: " + "; ".join(quality_flags) + "."
+
     return (
         f"Aggregated {valid_segments} valid voice segment(s). "
         f"Final result suggests a {result_label} with {confidence * 100:.1f}% confidence "
         f"and {stability * 100:.1f}% segment agreement ({strength} stability)."
         f"{skipped_note}"
+        f"{quality_note}"
     )
+
+
+def assess_report_quality(
+    stability: float,
+    confidence_gap: float,
+    valid_segments: int,
+    skipped_segments: list[dict],
+) -> dict:
+    total_segments = valid_segments + len(skipped_segments)
+    skipped_ratio = len(skipped_segments) / max(total_segments, 1)
+    quality_flags = []
+
+    if valid_segments < app.config["MIN_VALID_SEGMENTS"]:
+        quality_flags.append(
+            "Too few valid voice windows were usable for a stable decision"
+        )
+    if skipped_ratio > app.config["MAX_SKIPPED_SEGMENT_RATIO"]:
+        quality_flags.append(
+            "Too many low-quality windows were skipped from the recording"
+        )
+    if stability < app.config["MIN_SEGMENT_STABILITY"]:
+        quality_flags.append(
+            "Segment votes were inconsistent across the sample"
+        )
+    if confidence_gap < app.config["MIN_CONFIDENCE_GAP"]:
+        quality_flags.append(
+            "Healthy and Parkinson's probabilities were too close together"
+        )
+
+    if (
+        valid_segments < app.config["MIN_VALID_SEGMENTS"]
+        or skipped_ratio > app.config["MAX_SKIPPED_SEGMENT_RATIO"]
+    ):
+        quality_status = "retake"
+    elif quality_flags:
+        quality_status = "uncertain"
+    else:
+        quality_status = "accepted"
+
+    return {
+        "quality_status": quality_status,
+        "needs_retake": quality_status != "accepted",
+        "quality_flags": quality_flags,
+        "skipped_segment_ratio": round(skipped_ratio, 4),
+        "total_segment_count": total_segments,
+    }
 
 
 def analyze_voice_sample(audio_path: str) -> dict:
@@ -535,6 +707,12 @@ def analyze_voice_sample(audio_path: str) -> dict:
 
         label = "Parkinson's Detected" if prediction == 1 else "Healthy"
         confidence_gap = abs(parkinsons_probability - healthy_probability)
+        quality_assessment = assess_report_quality(
+            stability=stability,
+            confidence_gap=confidence_gap,
+            valid_segments=len(segment_results),
+            skipped_segments=skipped_segments,
+        )
         summary = build_report_summary(
             prediction=prediction,
             healthy_probability=healthy_probability,
@@ -542,6 +720,8 @@ def analyze_voice_sample(audio_path: str) -> dict:
             stability=stability,
             valid_segments=len(segment_results),
             skipped_segments=skipped_segments,
+            quality_status=quality_assessment["quality_status"],
+            quality_flags=quality_assessment["quality_flags"],
         )
 
         return {
@@ -558,6 +738,11 @@ def analyze_voice_sample(audio_path: str) -> dict:
             "features": averaged_features,
             "segment_results": segment_results,
             "skipped_segments": skipped_segments,
+            "quality_status": quality_assessment["quality_status"],
+            "needs_retake": quality_assessment["needs_retake"],
+            "quality_flags": quality_assessment["quality_flags"],
+            "skipped_segment_ratio": quality_assessment["skipped_segment_ratio"],
+            "total_segment_count": quality_assessment["total_segment_count"],
         }
     finally:
         for path in cleanup_paths:
@@ -581,38 +766,21 @@ def home():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "message": "Patient and doctor portal is running."})
+    return jsonify(
+        {
+            "status": "ok",
+            "message": "Doctor-managed patient portal with patient login is running.",
+        }
+    )
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if g.user is not None:
-        if g.user["role"] == "doctor":
-            return redirect(url_for("doctor_dashboard"))
-        return redirect(url_for("patient_dashboard"))
-
-    if request.method == "POST":
-        full_name = request.form.get("full_name", "").strip()
-        username = request.form.get("username", "").strip().lower()
-        password = request.form.get("password", "")
-        confirm_password = request.form.get("confirm_password", "")
-
-        if not full_name or not username or not password:
-            flash("Name, username, and password are required.", "error")
-        elif len(password) < 6:
-            flash("Password must be at least 6 characters long.", "error")
-        elif password != confirm_password:
-            flash("Passwords do not match.", "error")
-        else:
-            try:
-                create_patient_user(full_name, username, password)
-            except sqlite3.IntegrityError:
-                flash("That username is already taken. Please choose another one.", "error")
-            else:
-                flash("Patient account created. Please log in.", "success")
-                return redirect(url_for("patient_login"))
-
-    return render_template("register.html")
+    flash(
+        "Patient self-registration has been removed. Use the patient ID and password created by the doctor.",
+        "info",
+    )
+    return redirect(url_for("patient_login"))
 
 
 def process_login(role: str):
@@ -626,7 +794,11 @@ def process_login(role: str):
         password = request.form.get("password", "")
         user = get_user_by_username(username, role=role)
 
-        if user is None or not check_password_hash(user["password_hash"], password):
+        if (
+            user is None
+            or not user.get("password_hash")
+            or not check_password_hash(user["password_hash"], password)
+        ):
             flash("Invalid username or password.", "error")
         else:
             session.clear()
@@ -668,6 +840,44 @@ def patient_dashboard():
     )
 
 
+@app.route("/doctor/patients/create", methods=["POST"])
+@login_required(role="doctor")
+def doctor_create_patient():
+    full_name = request.form.get("full_name", "").strip()
+    mobile_number = request.form.get("mobile_number", "").strip()
+    password = request.form.get("password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    if not full_name or not mobile_number or not password:
+        flash("Patient name, mobile number, and password are required.", "error")
+        return redirect(url_for("doctor_dashboard"))
+
+    if password != confirm_password:
+        flash("Patient password and confirm password must match.", "error")
+        return redirect(url_for("doctor_dashboard"))
+
+    try:
+        patient = create_patient_record(full_name, mobile_number, password)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("doctor_dashboard"))
+    except sqlite3.IntegrityError:
+        flash(
+            "Could not create the patient because that generated ID already exists.",
+            "error",
+        )
+        return redirect(url_for("doctor_dashboard"))
+
+    flash(
+        (
+            f"Patient created successfully. Patient ID: {patient['username']}. "
+            "The patient can now log in with this ID and the password you created."
+        ),
+        "success",
+    )
+    return redirect(url_for("doctor_patient_detail", patient_id=patient["id"]))
+
+
 @app.route("/doctor/dashboard")
 @login_required(role="doctor")
 def doctor_dashboard():
@@ -691,6 +901,44 @@ def doctor_patient_detail(patient_id: int):
 
     reports = list_reports_for_patient(patient_id)
     return render_template("patient_detail.html", patient=patient, reports=reports)
+
+
+@app.route("/doctor/patient/<int:patient_id>/reports", methods=["POST"])
+@login_required(role="doctor")
+def doctor_create_patient_report(patient_id: int):
+    patient = get_user_by_id(patient_id, role="patient")
+    if patient is None:
+        return jsonify({"error": "Patient account was not found."}), 404
+
+    if "audio" not in request.files:
+        return jsonify({"error": "Please upload or record an audio sample first."}), 400
+
+    audio_file = request.files["audio"]
+    if audio_file.filename == "":
+        return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+
+    filename = secure_filename(audio_file.filename) or "voice_sample.wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(filename)) as temp:
+        audio_file.save(temp.name)
+        temp_path = temp.name
+
+    try:
+        report_data = analyze_voice_sample(temp_path)
+        saved_report = save_report(patient_id, filename, report_data)
+        return jsonify(
+            {
+                "message": "Report generated and saved successfully.",
+                "report": saved_report,
+            }
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        app.logger.exception("Unexpected analysis failure")
+        return jsonify({"error": "Could not analyze the uploaded audio."}), 500
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 @app.route("/api/reports", methods=["POST"])

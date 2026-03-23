@@ -382,6 +382,15 @@ code {
   flex-wrap: wrap;
 }
 
+.waveform-canvas {
+  width: 100%;
+  height: 160px;
+  display: block;
+  border-radius: 18px;
+  border: 1px solid rgba(20, 116, 111, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 247, 237, 0.92));
+}
+
 .record-timer {
   padding: 10px 14px;
   border-radius: 14px;
@@ -413,6 +422,12 @@ code {
   color: var(--primary);
   background: rgba(20, 116, 111, 0.08);
   border-color: rgba(20, 116, 111, 0.16);
+}
+
+.inline-status.is-warning {
+  color: #9a5d00;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.22);
 }
 
 .btn {
@@ -497,6 +512,11 @@ code {
   color: var(--danger);
 }
 
+.badge-warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #9a5d00;
+}
+
 .badge-neutral {
   background: var(--neutral-soft);
   color: var(--muted);
@@ -526,11 +546,21 @@ code {
   background: linear-gradient(180deg, #fb923c, #c2410c);
 }
 
+.report-review::before {
+  background: linear-gradient(180deg, #fbbf24, #b45309);
+}
+
 .report-head {
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 18px;
+}
+
+.report-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .report-head h3,
@@ -540,7 +570,7 @@ code {
 }
 
 .metric-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   margin-top: 18px;
 }
 
@@ -569,6 +599,22 @@ code {
   border-radius: 20px;
   background: rgba(18, 32, 41, 0.04);
   border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.quality-flags {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #9a5d00;
+}
+
+.quality-flags p {
+  margin: 0;
+}
+
+.quality-flags p + p {
+  margin-top: 8px;
 }
 
 .details-card summary {

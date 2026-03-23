@@ -9,9 +9,9 @@
       <h1>{{ role|title }} Login</h1>
       <p class="muted">
         {% if role == "doctor" %}
-          Sign in to review the patient list and saved reports.
+          Sign in to create patient accounts, assign patient passwords, and review saved reports.
         {% else %}
-          Sign in to upload or record a voice sample and save your reports.
+          Sign in with the patient ID and password created by the doctor to record or upload your voice sample.
         {% endif %}
       </p>
 
@@ -29,10 +29,10 @@
         <button class="btn btn-primary btn-block" type="submit">Login</button>
       </form>
 
-      {% if role == "patient" %}
-        <p class="auth-footnote">Need an account? <a class="text-link" href="{{ url_for('register') }}">Register as a patient</a></p>
-      {% else %}
+      {% if role == "doctor" %}
         <p class="auth-footnote">Default local doctor login: <code>doctor</code> / <code>doctor123</code></p>
+      {% else %}
+        <p class="auth-footnote">Your doctor will give you the generated patient ID and password.</p>
       {% endif %}
     </article>
   </section>

@@ -5,29 +5,28 @@
 {% block content %}
   <section class="hero">
     <div class="hero-copy">
-      <span class="eyebrow">Voice screening portal</span>
-      <h1>Patient login, doctor login, saved reports, and a more reliable voice analysis flow.</h1>
+      <span class="eyebrow">Doctor-created patient access</span>
+      <h1>The doctor creates the patient ID and password, then both doctor and patient can use the portal.</h1>
       <p class="hero-text">
-        This portal now records or uploads a longer voice sample, checks audio quality, analyzes multiple segments,
-        and stores each patient report so the doctor can review patient history from a separate dashboard.
+        The doctor creates each patient account from the dashboard using the patient's name, mobile number, and a doctor-set password.
+        Patients can then log in with that generated ID, record or upload voice samples, and the doctor can still review every saved report.
       </p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="{{ url_for('patient_login') }}">Patient Login</a>
-        <a class="btn btn-secondary" href="{{ url_for('register') }}">Patient Register</a>
-        <a class="btn btn-ghost" href="{{ url_for('doctor_login') }}">Doctor Login</a>
+        <a class="btn btn-secondary" href="{{ url_for('doctor_login') }}">Doctor Login</a>
       </div>
     </div>
 
     <div class="hero-panel">
       <div class="stat-card">
-        <span class="stat-label">Accuracy upgrade</span>
-        <strong>Multi-segment aggregation</strong>
-        <p>Longer samples are split into overlapping voice windows and averaged for a more stable report.</p>
+        <span class="stat-label">Patient ID format</span>
+        <strong>First 4 letters + last 4 digits</strong>
+        <p>The portal generates the patient ID from the patient's name and mobile number, while the doctor chooses the patient's password.</p>
       </div>
       <div class="stat-card">
-        <span class="stat-label">Role-based access</span>
-        <strong>Patients and doctors</strong>
-        <p>Patients create reports under their own login. Doctors sign in separately and review patient history.</p>
+        <span class="stat-label">Visible recording signal</span>
+        <strong>Live waveform during capture</strong>
+        <p>The recorder now shows the live wave signal so the patient can see that the microphone is active while sustaining the voice sample.</p>
       </div>
       <div class="stat-card highlight">
         <span class="stat-label">Local doctor account</span>
@@ -39,31 +38,31 @@
 
   <section class="grid-two">
     <article class="panel-card">
-      <span class="eyebrow">Patient portal</span>
-      <h2>Create your account and save your own reports</h2>
+      <span class="eyebrow">Doctor workflow</span>
+      <h2>Create the patient account and assign the password</h2>
       <p class="muted">
-        Patients can register, record an 8 to 10 second sustained vowel, upload an audio sample, and save each report to their dashboard.
+        Use the doctor dashboard to add a patient with a full name, mobile number, and password. The system generates the patient ID automatically and the doctor can share those credentials with the patient.
       </p>
       <ul class="feature-list">
-        <li>Patient registration and login</li>
-        <li>Voice recording in browser or file upload</li>
-        <li>Saved report history with biomarkers and segment votes</li>
+        <li>Doctor creates the patient password</li>
+        <li>Doctor can still record or upload on behalf of the patient</li>
+        <li>Saved report history with biomarkers, segment votes, and retake flags</li>
       </ul>
-      <a class="text-link" href="{{ url_for('register') }}">Create patient account</a>
+      <a class="text-link" href="{{ url_for('doctor_login') }}">Open doctor login</a>
     </article>
 
     <article class="panel-card">
-      <span class="eyebrow">Doctor portal</span>
-      <h2>Review patient list and their report history</h2>
+      <span class="eyebrow">Patient workflow</span>
+      <h2>Patients can log in and create their own recordings again</h2>
       <p class="muted">
-        The doctor dashboard shows all patients, report counts, latest verdicts, and a patient detail page with every stored report.
+        Patients log in with the doctor-created ID and password, record an 8 to 10 second sustained voice sample, and save reports directly to their own dashboard.
       </p>
       <ul class="feature-list">
-        <li>Separate doctor login</li>
-        <li>Patient list with latest result</li>
-        <li>Detailed report review per patient</li>
+        <li>Patient login restored</li>
+        <li>Live waveform while recording</li>
+        <li>Doctor can review the full patient history anytime</li>
       </ul>
-      <a class="text-link" href="{{ url_for('doctor_login') }}">Open doctor login</a>
+      <a class="text-link" href="{{ url_for('patient_login') }}">Open patient login</a>
     </article>
   </section>
 {% endblock %}

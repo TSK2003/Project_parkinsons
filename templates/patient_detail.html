@@ -8,13 +8,72 @@
       <span class="eyebrow">Patient detail</span>
       <h1>{{ patient.full_name }}</h1>
       <p class="muted">
-        Username: {{ patient.username }}. Joined {{ patient.created_at|dt }}. Review every saved report below.
+        Patient ID: <code>{{ patient.username }}</code>. Mobile: {{ patient.mobile_number or "-" }}. Joined {{ patient.created_at|dt }}.
       </p>
     </div>
     <div class="hero-note">
-      <strong>Doctor view</strong>
-      <p>This page is visible only to the doctor account and includes the patient's full saved report history.</p>
+      <strong>Doctor-only workflow</strong>
+      <p>Record or upload the patient's voice sample here. The patient does not need a separate login, username, or password.</p>
     </div>
+  </section>
+
+  <section class="dashboard-grid">
+    <article class="panel-card">
+      <span class="eyebrow">Create report</span>
+      <h2>Analyze and save a new voice report</h2>
+
+      <form id="analysisForm" class="stack-form" data-endpoint="{{ url_for('doctor_create_patient_report', patient_id=patient.id) }}">
+        <div class="form-grid single-mobile">
+          <label class="field">
+            <span>Upload audio file</span>
+            <input id="audioFile" type="file" accept=".wav,audio/wav,audio/x-wav">
+            <small>Upload a WAV file for the most reliable analysis. Browser recordings are automatically exported as WAV.</small>
+          </label>
+
+          <div class="recorder-box">
+            <span class="field-label">Or record in browser</span>
+            <div class="record-controls">
+              <button type="button" class="btn btn-secondary" id="recordStart">Start Recording</button>
+              <button type="button" class="btn btn-ghost" id="recordStop" disabled>Stop</button>
+              <span class="record-timer" id="recordTimer">00:00</span>
+            </div>
+            <canvas id="waveformCanvas" class="waveform-canvas" width="640" height="160" aria-label="Live recording waveform"></canvas>
+            <audio id="recordedPreview" controls hidden></audio>
+            <small>Ask the patient to sustain "Ahh" for 8 to 10 seconds in a quiet room. The waveform should move while they are speaking, and the recorder auto-stops after 10 seconds.</small>
+          </div>
+        </div>
+
+        <div id="analysisStatus" class="inline-status">
+          No audio uploaded yet. Choose a file or record a sample to create a new patient report.
+        </div>
+
+        <button id="analyzeBtn" class="btn btn-primary btn-block" type="submit">Analyze and Save Report</button>
+      </form>
+    </article>
+
+    <article class="panel-card">
+      <span class="eyebrow">Patient summary</span>
+      <h2>Assigned patient details</h2>
+
+      <div class="metric-grid">
+        <div class="metric-tile">
+          <span>Patient ID</span>
+          <strong>{{ patient.username }}</strong>
+        </div>
+        <div class="metric-tile">
+          <span>Mobile number</span>
+          <strong>{{ patient.mobile_number or "-" }}</strong>
+        </div>
+        <div class="metric-tile">
+          <span>Saved reports</span>
+          <strong>{{ reports|length }}</strong>
+        </div>
+      </div>
+
+      <div class="details-card">
+        <p class="muted">Use this patient ID for doctor-side follow-up. The patient does not log in directly to this portal.</p>
+      </div>
+    </article>
   </section>
 
   <section class="panel-card">
@@ -35,8 +94,12 @@
     {% else %}
       <div class="empty-card">
         <h3>No reports for this patient yet</h3>
-        <p>The patient has an account, but no saved voice analysis reports are available yet.</p>
+        <p>Create the first report above by recording or uploading the patient's voice sample.</p>
       </div>
     {% endif %}
   </section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='patient.js') }}"></script>
 {% endblock %}

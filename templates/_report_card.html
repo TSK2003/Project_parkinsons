@@ -1,4 +1,4 @@
-<article class="report-card {% if report.prediction == 1 %}report-alert{% else %}report-ok{% endif %}">
+<article class="report-card {% if report.quality_status != 'accepted' %}report-review{% elif report.prediction == 1 %}report-alert{% else %}report-ok{% endif %}">
   <div class="report-head">
     <div>
       <span class="eyebrow">{{ report.created_at|dt }}</span>
@@ -7,12 +7,27 @@
         <p class="muted">{{ report.patient_name }} ({{ report.patient_username }})</p>
       {% endif %}
     </div>
-    <span class="badge {% if report.prediction == 1 %}badge-danger{% else %}badge-success{% endif %}">
-      {{ report.label }}
-    </span>
+    <div class="report-badges">
+      <span class="badge {% if report.prediction == 1 %}badge-danger{% else %}badge-success{% endif %}">
+        {{ report.label }}
+      </span>
+      {% if report.quality_status == "uncertain" %}
+        <span class="badge badge-warning">Low Confidence</span>
+      {% elif report.quality_status == "retake" %}
+        <span class="badge badge-warning">Retake Recommended</span>
+      {% endif %}
+    </div>
   </div>
 
   <p class="report-summary">{{ report.summary }}</p>
+
+  {% if report.quality_flags %}
+    <div class="quality-flags">
+      {% for quality_flag in report.quality_flags %}
+        <p>{{ quality_flag }}</p>
+      {% endfor %}
+    </div>
+  {% endif %}
 
   <div class="metric-grid">
     <div class="metric-tile">
@@ -30,6 +45,10 @@
     <div class="metric-tile">
       <span>Stability</span>
       <strong>{{ report.stability|pct }}</strong>
+    </div>
+    <div class="metric-tile">
+      <span>Review</span>
+      <strong>{{ report.quality_status|replace('_', ' ')|title }}</strong>
     </div>
   </div>
 
