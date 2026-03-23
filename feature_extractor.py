@@ -7,16 +7,16 @@ from scipy.signal import resample_poly
 
 MIN_DURATION_SECONDS = 2.0
 MIN_RMS = 0.002
-MIN_VOICED_SECONDS = 0.9
+MIN_VOICED_SECONDS = 0.7
 MIN_VOICED_FRAMES = 20
 MAX_CLIPPED_FRACTION = 0.01
 
 TARGET_SAMPLE_RATE = 44100
 PITCH_FLOOR = 75
 PITCH_CEILING = 600
-PITCH_STRENGTH_FLOOR = 0.25
+PITCH_STRENGTH_FLOOR = 0.18
 PITCH_FRAME_STEP_SECONDS = 0.01
-MAX_UNVOICED_GAP_FRAMES = 6
+MAX_UNVOICED_GAP_FRAMES = 10
 
 PERIOD_FLOOR = 0.0001
 PERIOD_CEILING = 0.02
@@ -118,7 +118,7 @@ def _extract_longest_voiced_region(
     voiced_duration = (end_index - start_index + 1) * frame_step
     if voiced_duration < MIN_VOICED_SECONDS:
         raise ValueError(
-            "The recording does not contain a long enough steady voiced segment. Please hold 'Ahh' steadily for a little longer."
+            "The app detected sound, but not enough steady single-pitch 'Ahh'. Please hold one continuous 'Ahh' a little longer without changing pitch."
         )
 
     margin = frame_step * 2
