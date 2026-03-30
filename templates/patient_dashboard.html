@@ -26,7 +26,7 @@
         <div class="form-grid single-mobile">
           <label class="field">
             <span>Upload audio file</span>
-            <input id="audioFile" type="file" accept=".wav,audio/wav,audio/x-wav">
+            <input id="audioFile" name="audio" type="file" accept=".wav,audio/wav,audio/x-wav">
             <small>Upload a WAV file for the most reliable analysis. Browser recordings are automatically exported as WAV.</small>
           </label>
 
@@ -42,6 +42,11 @@
             <small>The recorder auto-stops after 10 seconds, requests mono capture, disables browser audio enhancements when possible, and shows the live wave signal while recording.</small>
           </div>
         </div>
+
+        <label class="checkbox-field">
+          <input type="checkbox" name="consent_training" value="1">
+          <span>I consent to this recording being used to improve the AI model (anonymised)</span>
+        </label>
 
         <div id="analysisStatus" class="inline-status">
           No audio uploaded yet. Choose a file or record a sample to create a new report.

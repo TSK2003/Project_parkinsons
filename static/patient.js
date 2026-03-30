@@ -4,6 +4,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return
   }
 
+  const confirmForms = Array.from(document.querySelectorAll(".report-confirm-form"))
   const fileInput = document.getElementById("audioFile")
   const startButton = document.getElementById("recordStart")
   const stopButton = document.getElementById("recordStop")
@@ -555,6 +556,10 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       payload.append("audio", recordedBlob, "patient_recording.wav")
     }
+    const consentCheckbox = form.querySelector('input[name="consent_training"]')
+    if (consentCheckbox?.checked) {
+      payload.append("consent_training", "1")
+    }
 
     analyzeButton.disabled = true
     startButton.disabled = true
@@ -587,6 +592,53 @@ document.addEventListener("DOMContentLoaded", () => {
       startButton.disabled = false
       stopButton.disabled = false
     }
+  })
+
+  confirmForms.forEach((confirmForm) => {
+    const statusNode = confirmForm.querySelector(".report-confirm-status")
+    confirmForm.addEventListener("submit", async (event) => {
+      event.preventDefault()
+
+      const select = confirmForm.querySelector('select[name="clinician_confirmed_label"]')
+      if (!select) {
+        return
+      }
+
+      if (statusNode) {
+        statusNode.textContent = "Saving clinician confirmation."
+        statusNode.className = "inline-status report-confirm-status is-working"
+      }
+
+      try {
+        const response = await fetch(confirmForm.dataset.endpoint, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            clinician_confirmed_label: select.value,
+          }),
+        })
+        const data = await response.json()
+        if (!response.ok || data.error) {
+          throw new Error(data.error || "Could not save clinician confirmation.")
+        }
+
+        if (statusNode) {
+          statusNode.textContent = "Clinician confirmation saved."
+          statusNode.className = "inline-status report-confirm-status is-success"
+        }
+
+        window.setTimeout(() => {
+          window.location.reload()
+        }, 800)
+      } catch (error) {
+        if (statusNode) {
+          statusNode.textContent = error.message || "Could not save clinician confirmation."
+          statusNode.className = "inline-status report-confirm-status is-error"
+        }
+      }
+    })
   })
 
   window.addEventListener("beforeunload", () => {

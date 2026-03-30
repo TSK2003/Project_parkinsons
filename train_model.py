@@ -4,7 +4,14 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
+import sklearn
+from imblearn.over_sampling import SMOTE
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+    VotingClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
@@ -19,6 +26,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
@@ -28,17 +36,42 @@ EVAL_DIR = os.path.join(MODELS_DIR, "evaluation")
 RANDOM_STATE = 42
 OUTER_SPLITS = 4
 INNER_SPLITS = 4
-TARGET_PD_RECALL = 0.85
-TARGET_BALANCED_ACCURACY = 0.75
+TARGET_PD_RECALL = 0.80
+TARGET_BALANCED_ACCURACY = 0.88
 THRESHOLD_GRID = np.round(np.linspace(0.25, 0.85, 25), 3)
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(EVAL_DIR, exist_ok=True)
 
 
+ALL_DATASET_FEATURES = [
+    "MDVP:Fo(Hz)",
+    "MDVP:Fhi(Hz)",
+    "MDVP:Flo(Hz)",
+    "MDVP:Jitter(%)",
+    "MDVP:Jitter(Abs)",
+    "MDVP:RAP",
+    "MDVP:PPQ",
+    "Jitter:DDP",
+    "MDVP:Shimmer",
+    "MDVP:Shimmer(dB)",
+    "Shimmer:APQ3",
+    "Shimmer:APQ5",
+    "MDVP:APQ",
+    "Shimmer:DDA",
+    "NHR",
+    "HNR",
+    "RPDE",
+    "DFA",
+    "spread1",
+    "spread2",
+    "D2",
+    "PPE",
+]
+
 FEATURE_SUBSETS = {
     "paper_4": ["HNR", "RPDE", "DFA", "PPE"],
-    "paper_6": [
+    "paper_7": [
         "MDVP:Jitter(Abs)",
         "Jitter:DDP",
         "MDVP:APQ",
@@ -58,53 +91,106 @@ FEATURE_SUBSETS = {
         "spread2",
         "PPE",
     ],
+    "full_22": ALL_DATASET_FEATURES,
 }
 
 
+def build_pipeline(classifier) -> Pipeline:
+    return Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            ("classifier", classifier),
+        ]
+    )
+
+
 def build_candidate_configs() -> list[dict]:
+    def build_soft_voting_ensemble() -> VotingClassifier:
+        return VotingClassifier(
+            estimators=[
+                (
+                    "et",
+                    ExtraTreesClassifier(
+                        n_estimators=200,
+                        class_weight="balanced",
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1,
+                    ),
+                ),
+                (
+                    "gb",
+                    GradientBoostingClassifier(
+                        n_estimators=100,
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+                (
+                    "svm",
+                    SVC(
+                        kernel="rbf",
+                        probability=True,
+                        class_weight="balanced",
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+            ],
+            voting="soft",
+        )
+
     return [
         {
             "name": "nonlinear_5_extra_trees",
             "feature_set": "nonlinear_5",
             "features": FEATURE_SUBSETS["nonlinear_5"],
             "model_name": "ExtraTreesClassifier",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        ExtraTreesClassifier(
-                            n_estimators=250,
-                            max_depth=None,
-                            min_samples_split=2,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                            n_jobs=-1,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=250,
+                    max_depth=None,
+                    min_samples_split=2,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
             ),
+        },
+        {
+            "name": "nonlinear_5_svm",
+            "feature_set": "nonlinear_5",
+            "features": FEATURE_SUBSETS["nonlinear_5"],
+            "model_name": "SVC",
+            "build_estimator": lambda: build_pipeline(
+                SVC(
+                    kernel="rbf",
+                    probability=True,
+                    class_weight="balanced",
+                    C=10,
+                    gamma="scale",
+                    random_state=RANDOM_STATE,
+                )
+            ),
+        },
+        {
+            "name": "nonlinear_5_ensemble",
+            "feature_set": "nonlinear_5",
+            "features": FEATURE_SUBSETS["nonlinear_5"],
+            "model_name": "VotingClassifier",
+            "build_estimator": lambda: build_pipeline(build_soft_voting_ensemble()),
         },
         {
             "name": "paper_4_extra_trees",
             "feature_set": "paper_4",
             "features": FEATURE_SUBSETS["paper_4"],
             "model_name": "ExtraTreesClassifier",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        ExtraTreesClassifier(
-                            n_estimators=250,
-                            max_depth=None,
-                            min_samples_split=2,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                            n_jobs=-1,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=250,
+                    max_depth=None,
+                    min_samples_split=2,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
             ),
         },
         {
@@ -112,44 +198,101 @@ def build_candidate_configs() -> list[dict]:
             "feature_set": "paper_4",
             "features": FEATURE_SUBSETS["paper_4"],
             "model_name": "LogisticRegression",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        LogisticRegression(
-                            max_iter=5000,
-                            C=1.0,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                LogisticRegression(
+                    max_iter=5000,
+                    C=1.0,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                )
             ),
         },
         {
-            "name": "paper_6_random_forest",
-            "feature_set": "paper_6",
-            "features": FEATURE_SUBSETS["paper_6"],
+            "name": "paper_7_random_forest",
+            "feature_set": "paper_7",
+            "features": FEATURE_SUBSETS["paper_7"],
             "model_name": "RandomForestClassifier",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        RandomForestClassifier(
-                            n_estimators=250,
-                            max_depth=None,
-                            min_samples_split=2,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                            n_jobs=-1,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                RandomForestClassifier(
+                    n_estimators=250,
+                    max_depth=None,
+                    min_samples_split=2,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
+            ),
+        },
+        {
+            "name": "robust_8_extra_trees",
+            "feature_set": "robust_8",
+            "features": FEATURE_SUBSETS["robust_8"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
+            ),
+        },
+        {
+            "name": "robust_8_gradient_boost",
+            "feature_set": "robust_8",
+            "features": FEATURE_SUBSETS["robust_8"],
+            "model_name": "GradientBoostingClassifier",
+            "build_estimator": lambda: build_pipeline(
+                GradientBoostingClassifier(
+                    n_estimators=200,
+                    learning_rate=0.05,
+                    random_state=RANDOM_STATE,
+                )
+            ),
+        },
+        {
+            "name": "full_22_gradient_boost",
+            "feature_set": "full_22",
+            "features": FEATURE_SUBSETS["full_22"],
+            "model_name": "GradientBoostingClassifier",
+            "build_estimator": lambda: build_pipeline(
+                GradientBoostingClassifier(
+                    n_estimators=200,
+                    learning_rate=0.05,
+                    random_state=RANDOM_STATE,
+                )
+            ),
+        },
+        {
+            "name": "full_22_extra_trees",
+            "feature_set": "full_22",
+            "features": FEATURE_SUBSETS["full_22"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
             ),
         },
     ]
+
+
+def validate_feature_subsets(feature_names: list[str]) -> None:
+    missing_by_subset = {}
+    for subset_name, subset_features in FEATURE_SUBSETS.items():
+        missing = [feature for feature in subset_features if feature not in feature_names]
+        if missing:
+            missing_by_subset[subset_name] = missing
+
+    if missing_by_subset:
+        details = "; ".join(
+            f"{subset}: {', '.join(features)}"
+            for subset, features in missing_by_subset.items()
+        )
+        raise ValueError(f"Configured feature subsets reference missing dataset columns: {details}")
 
 
 def extract_subject_ids(names: pd.Series) -> pd.Series:
@@ -205,25 +348,19 @@ def candidate_rank(metrics: dict) -> tuple:
     return (
         int(metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL),
         round(metrics["balanced_accuracy"], 6),
-        round(metrics["pd_recall_sensitivity"], 6),
         round(metrics["healthy_recall_specificity"], 6),
+        round(metrics["pd_recall_sensitivity"], 6),
         round(metrics["f1_score"], 6),
     )
 
 
 def threshold_rank(metrics: dict) -> tuple:
-    feasible = (
-        metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL
-        and metrics["balanced_accuracy"] >= TARGET_BALANCED_ACCURACY
-    )
-    recall_feasible = metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL
     return (
-        int(feasible),
-        int(recall_feasible),
+        int(metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL),
         round(metrics["balanced_accuracy"], 6),
         round(metrics["healthy_recall_specificity"], 6),
-        round(metrics["f1_score"], 6),
         round(metrics["pd_recall_sensitivity"], 6),
+        round(metrics["f1_score"], 6),
     )
 
 
@@ -245,6 +382,19 @@ def tune_threshold(subject_probabilities: pd.DataFrame) -> dict:
     return best
 
 
+def fit_estimator_with_smote(
+    candidate: dict,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+):
+    estimator = candidate["build_estimator"]()
+    train_subset = X_train[candidate["features"]]
+    smote = SMOTE(random_state=RANDOM_STATE)
+    X_train_res, y_train_res = smote.fit_resample(train_subset, y_train)
+    estimator.fit(X_train_res, y_train_res)
+    return estimator
+
+
 def evaluate_candidate_with_inner_cv(
     candidate: dict,
     X_train: pd.DataFrame,
@@ -262,18 +412,19 @@ def evaluate_candidate_with_inner_cv(
         inner_cv.split(X_train, y_train, groups=groups_train),
         start=1,
     ):
-        estimator = candidate["build_estimator"]()
-        estimator.fit(
-            X_train.iloc[inner_train_index][candidate["features"]],
-            y_train.iloc[inner_train_index],
-        )
+        inner_X_train = X_train.iloc[inner_train_index]
+        inner_y_train = y_train.iloc[inner_train_index]
+        inner_X_valid = X_train.iloc[inner_valid_index]
+        inner_y_valid = y_train.iloc[inner_valid_index]
+
+        estimator = fit_estimator_with_smote(candidate, inner_X_train, inner_y_train)
         probabilities = estimator.predict_proba(
-            X_train.iloc[inner_valid_index][candidate["features"]]
+            inner_X_valid[candidate["features"]]
         )[:, 1]
 
         for subject_id, y_true, pd_probability in zip(
             groups_train.iloc[inner_valid_index],
-            y_train.iloc[inner_valid_index],
+            inner_y_valid,
             probabilities,
         ):
             rows.append(
@@ -478,6 +629,10 @@ def print_metric_block(title: str, metrics: dict) -> None:
     )
 
 
+def relative_path(path: str) -> str:
+    return os.path.relpath(path, BASE_DIR)
+
+
 def main() -> None:
     print("=" * 72)
     print("Parkinson's Disease Training Pipeline - Subset + Threshold Tuning")
@@ -495,6 +650,7 @@ def main() -> None:
     print(f"Parkinson's subjects   : {int((subject_status == 1).sum())}")
 
     feature_names = [column for column in df.columns if column not in {"name", "status", "subject_id"}]
+    validate_feature_subsets(feature_names)
     X = df[feature_names]
     y = df["status"]
     groups = df["subject_id"]
@@ -532,8 +688,7 @@ def main() -> None:
         estimator_template = next(
             candidate for candidate in candidate_configs if candidate["name"] == best_candidate["candidate_name"]
         )
-        final_fold_estimator = estimator_template["build_estimator"]()
-        final_fold_estimator.fit(X_train[best_candidate["features"]], y_train)
+        final_fold_estimator = fit_estimator_with_smote(estimator_template, X_train, y_train)
         test_probabilities = final_fold_estimator.predict_proba(X_test[best_candidate["features"]])[:, 1]
 
         for recording_name, subject_id, y_true, pd_probability in zip(
@@ -582,23 +737,20 @@ def main() -> None:
             f"  Fold {fold_index}: {best_candidate['candidate_name']} | "
             f"threshold={best_candidate['threshold']:.3f} | "
             f"balanced_accuracy={fold_metrics['balanced_accuracy']:.4f} | "
+            f"healthy_recall={fold_metrics['healthy_recall_specificity']:.4f} | "
             f"pd_recall={fold_metrics['pd_recall_sensitivity']:.4f}"
         )
 
     print("\n[3/7] Aggregating outer-fold predictions at subject level...")
+    recording_eval_path = os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv")
+    subject_eval_path = os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv")
     recording_eval = pd.DataFrame(outer_prediction_rows).sort_values(
         ["fold", "subject_id", "recording_name"]
     )
-    recording_eval.to_csv(
-        os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv"),
-        index=False,
-    )
+    recording_eval.to_csv(recording_eval_path, index=False)
 
     subject_eval = aggregate_subject_predictions(outer_prediction_rows)
-    subject_eval.to_csv(
-        os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv"),
-        index=False,
-    )
+    subject_eval.to_csv(subject_eval_path, index=False)
 
     subject_metrics = compute_subject_metrics(subject_eval)
     print_metric_block("Subject-Level Out-of-Fold Metrics", subject_metrics)
@@ -608,24 +760,27 @@ def main() -> None:
     subject_y_pred = subject_eval["prediction"].to_numpy()
     subject_y_score = subject_eval["parkinsons_probability"].to_numpy()
 
+    subject_confusion_matrix_stem = os.path.join(EVAL_DIR, "subject_confusion_matrix")
+    roc_curve_csv_path = os.path.join(EVAL_DIR, "roc_curve.csv")
+    precision_recall_curve_csv_path = os.path.join(EVAL_DIR, "precision_recall_curve.csv")
+    roc_curve_svg_path = os.path.join(EVAL_DIR, "roc_curve.svg")
+    precision_recall_curve_svg_path = os.path.join(EVAL_DIR, "precision_recall_curve.svg")
+
     subject_cm = confusion_matrix(subject_y_true, subject_y_pred, labels=[0, 1])
-    write_confusion_matrix_artifacts(
-        os.path.join(EVAL_DIR, "subject_confusion_matrix"),
-        subject_cm,
-    )
+    write_confusion_matrix_artifacts(subject_confusion_matrix_stem, subject_cm)
 
     fpr, tpr, _ = roc_curve(subject_y_true, subject_y_score)
     precision, recall, _ = precision_recall_curve(subject_y_true, subject_y_score)
-    write_curve_csv(os.path.join(EVAL_DIR, "roc_curve.csv"), "fpr", fpr, "tpr", tpr)
+    write_curve_csv(roc_curve_csv_path, "fpr", fpr, "tpr", tpr)
     write_curve_csv(
-        os.path.join(EVAL_DIR, "precision_recall_curve.csv"),
+        precision_recall_curve_csv_path,
         "recall",
         recall,
         "precision",
         precision,
     )
     write_line_chart_svg(
-        os.path.join(EVAL_DIR, "roc_curve.svg"),
+        roc_curve_svg_path,
         x_values=fpr,
         y_values=tpr,
         title="Subject-Level ROC Curve",
@@ -634,7 +789,7 @@ def main() -> None:
         diagonal_reference=True,
     )
     write_line_chart_svg(
-        os.path.join(EVAL_DIR, "precision_recall_curve.svg"),
+        precision_recall_curve_svg_path,
         x_values=recall,
         y_values=precision,
         title="Subject-Level Precision-Recall Curve",
@@ -657,8 +812,7 @@ def main() -> None:
     final_config = next(
         candidate for candidate in candidate_configs if candidate["name"] == final_choice["candidate_name"]
     )
-    final_estimator = final_config["build_estimator"]()
-    final_estimator.fit(X[final_choice["features"]], y)
+    final_estimator = fit_estimator_with_smote(final_config, X, y)
 
     print(f"Best candidate          : {final_choice['candidate_name']}")
     print(f"Feature set             : {final_choice['feature_set']}")
@@ -669,14 +823,17 @@ def main() -> None:
         print(f"  - {feature}")
 
     print("\n[6/7] Saving inference artifacts...")
-    joblib.dump(final_estimator, os.path.join(MODELS_DIR, "prediction_pipeline.pkl"))
-    joblib.dump(final_estimator.named_steps["classifier"], os.path.join(MODELS_DIR, "parkinsons_model.pkl"))
-    joblib.dump(final_estimator.named_steps["scaler"], os.path.join(MODELS_DIR, "scaler.pkl"))
-    joblib.dump(final_choice["features"], os.path.join(MODELS_DIR, "selected_features.pkl"))
+    prediction_pipeline_path = os.path.join(MODELS_DIR, "prediction_pipeline.pkl")
+    selected_features_path = os.path.join(MODELS_DIR, "selected_features.pkl")
+    model_metadata_path = os.path.join(MODELS_DIR, "model_metadata.json")
+
+    joblib.dump(final_estimator, prediction_pipeline_path)
+    joblib.dump(final_choice["features"], selected_features_path)
 
     metadata = {
-        "training_mode": "subject_grouped_subset_threshold_tuning",
-        "scoring_metric": "balanced_accuracy_with_pd_recall_target",
+        "training_mode": "subject_grouped_subset_threshold_tuning_with_smote",
+        "scoring_metric": "balanced_accuracy_with_pd_recall_floor",
+        "sklearn_version": sklearn.__version__,
         "outer_splits": OUTER_SPLITS,
         "inner_splits": INNER_SPLITS,
         "decision_threshold": round(float(final_choice["threshold"]), 4),
@@ -686,6 +843,11 @@ def main() -> None:
         "feature_set_name": final_choice["feature_set"],
         "best_classifier": final_choice["model_name"],
         "selected_features": final_choice["features"],
+        "artifact_paths": {
+            "prediction_pipeline": relative_path(prediction_pipeline_path),
+            "selected_features": relative_path(selected_features_path),
+            "model_metadata": relative_path(model_metadata_path),
+        },
         "subject_level_oof_metrics": {
             key: round(value, 4)
             for key, value in subject_metrics.items()
@@ -695,14 +857,14 @@ def main() -> None:
             for key, value in final_choice["inner_subject_metrics"].items()
         },
         "evaluation_artifacts": {
-            "recording_level_oof_predictions": os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv"),
-            "subject_level_oof_predictions": os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv"),
-            "subject_confusion_matrix_json": os.path.join(EVAL_DIR, "subject_confusion_matrix.json"),
-            "subject_confusion_matrix_svg": os.path.join(EVAL_DIR, "subject_confusion_matrix.svg"),
-            "roc_curve_csv": os.path.join(EVAL_DIR, "roc_curve.csv"),
-            "roc_curve_svg": os.path.join(EVAL_DIR, "roc_curve.svg"),
-            "precision_recall_curve_csv": os.path.join(EVAL_DIR, "precision_recall_curve.csv"),
-            "precision_recall_curve_svg": os.path.join(EVAL_DIR, "precision_recall_curve.svg"),
+            "recording_level_oof_predictions": relative_path(recording_eval_path),
+            "subject_level_oof_predictions": relative_path(subject_eval_path),
+            "subject_confusion_matrix_json": relative_path(f"{subject_confusion_matrix_stem}.json"),
+            "subject_confusion_matrix_svg": relative_path(f"{subject_confusion_matrix_stem}.svg"),
+            "roc_curve_csv": relative_path(roc_curve_csv_path),
+            "roc_curve_svg": relative_path(roc_curve_svg_path),
+            "precision_recall_curve_csv": relative_path(precision_recall_curve_csv_path),
+            "precision_recall_curve_svg": relative_path(precision_recall_curve_svg_path),
         },
         "fold_summaries": fold_summaries,
         "final_candidate_results": [
@@ -720,7 +882,7 @@ def main() -> None:
         ],
     }
 
-    with open(os.path.join(MODELS_DIR, "model_metadata.json"), "w", encoding="utf-8") as handle:
+    with open(model_metadata_path, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
 
     print("\n[7/7] Saved final model, subset, and tuned threshold.")

@@ -8,6 +8,7 @@ from functools import wraps
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 from flask import (
     Flask,
     abort,
@@ -25,7 +26,7 @@ from scipy.io import wavfile
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-from feature_extractor import extract_features
+from feature_extractor import ALL_FEATURE_NAMES, extract_features
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -34,34 +35,10 @@ DATABASE_PATH = os.path.join(DATA_DIR, "portal.db")
 
 MODEL_PIPELINE_PATH = os.path.join(MODELS_DIR, "prediction_pipeline.pkl")
 MODEL_METADATA_PATH = os.path.join(MODELS_DIR, "model_metadata.json")
-LEGACY_MODEL_PATH = os.path.join(MODELS_DIR, "parkinsons_model.pkl")
-LEGACY_SCALER_PATH = os.path.join(MODELS_DIR, "scaler.pkl")
-LEGACY_RFE_PATH = os.path.join(MODELS_DIR, "rfe_selector.pkl")
 
-ALL_FEATURES = [
-    "MDVP:Fo(Hz)",
-    "MDVP:Fhi(Hz)",
-    "MDVP:Flo(Hz)",
-    "MDVP:Jitter(%)",
-    "MDVP:Jitter(Abs)",
-    "MDVP:RAP",
-    "MDVP:PPQ",
-    "Jitter:DDP",
-    "MDVP:Shimmer",
-    "MDVP:Shimmer(dB)",
-    "Shimmer:APQ3",
-    "Shimmer:APQ5",
-    "MDVP:APQ",
-    "Shimmer:DDA",
-    "NHR",
-    "HNR",
-    "RPDE",
-    "DFA",
-    "spread1",
-    "spread2",
-    "D2",
-    "PPE",
-]
+ALL_FEATURES = list(ALL_FEATURE_NAMES)
+ALLOWED_GENDERS = {"male", "female", "unspecified"}
+ALLOWED_CLINICIAN_LABELS = {"confirmed_pd", "confirmed_healthy", "unconfirmed"}
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "parkinsons-portal-dev-key")
@@ -70,7 +47,7 @@ app.config["SEGMENT_SECONDS"] = float(os.environ.get("SEGMENT_SECONDS", "3.0"))
 app.config["SEGMENT_OVERLAP_SECONDS"] = float(
     os.environ.get("SEGMENT_OVERLAP_SECONDS", "1.0")
 )
-app.config["MIN_VALID_SEGMENTS"] = int(os.environ.get("MIN_VALID_SEGMENTS", "2"))
+app.config["MIN_VALID_SEGMENTS"] = int(os.environ.get("MIN_VALID_SEGMENTS", "3"))
 app.config["MAX_SKIPPED_SEGMENT_RATIO"] = float(
     os.environ.get("MAX_SKIPPED_SEGMENT_RATIO", "0.34")
 )
@@ -82,10 +59,6 @@ app.config["MIN_CONFIDENCE_GAP"] = float(
 )
 CORS(app)
 
-prediction_pipeline = None
-legacy_model = None
-legacy_scaler = None
-legacy_rfe_selector = None
 model_metadata = {}
 selected_model_features = ALL_FEATURES
 prediction_threshold = 0.5
@@ -96,18 +69,40 @@ if os.path.exists(MODEL_METADATA_PATH):
     selected_model_features = model_metadata.get("selected_features", ALL_FEATURES)
     prediction_threshold = float(model_metadata.get("decision_threshold", 0.5))
 
-if os.path.exists(MODEL_PIPELINE_PATH):
-    prediction_pipeline = joblib.load(MODEL_PIPELINE_PATH)
-else:
-    legacy_model = joblib.load(LEGACY_MODEL_PATH)
-    legacy_scaler = joblib.load(LEGACY_SCALER_PATH)
-    legacy_rfe_selector = (
-        joblib.load(LEGACY_RFE_PATH) if os.path.exists(LEGACY_RFE_PATH) else None
+if not os.path.exists(MODEL_PIPELINE_PATH):
+    raise FileNotFoundError(
+        f"Primary model not found at {MODEL_PIPELINE_PATH}. "
+        "Run `python train_model.py` to generate it."
+    )
+
+prediction_pipeline = joblib.load(MODEL_PIPELINE_PATH)
+
+trained_sklearn = model_metadata.get("sklearn_version")
+current_sklearn = sklearn.__version__
+if trained_sklearn and trained_sklearn != current_sklearn:
+    app.logger.warning(
+        f"Model was trained with scikit-learn {trained_sklearn} "
+        f"but current version is {current_sklearn}. "
+        "Consider retraining to avoid compatibility issues."
     )
 
 
 def utc_now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def normalize_gender(gender: str | None) -> str:
+    if gender is None:
+        return "unspecified"
+    cleaned = gender.strip().lower()
+    return cleaned if cleaned in ALLOWED_GENDERS else "unspecified"
+
+
+def normalize_clinician_label(label: str | None) -> str:
+    if label is None:
+        return "unconfirmed"
+    cleaned = label.strip().lower()
+    return cleaned if cleaned in ALLOWED_CLINICIAN_LABELS else ""
 
 
 def get_db() -> sqlite3.Connection:
@@ -135,6 +130,7 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             full_name TEXT NOT NULL,
             mobile_number TEXT,
+            gender TEXT NOT NULL DEFAULT 'unspecified',
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT,
             role TEXT NOT NULL CHECK(role IN ('patient', 'doctor')),
@@ -159,6 +155,8 @@ def init_db() -> None:
             quality_status TEXT NOT NULL DEFAULT 'accepted',
             needs_retake INTEGER NOT NULL DEFAULT 0,
             quality_flags_json TEXT NOT NULL DEFAULT '[]',
+            consented_for_training INTEGER NOT NULL DEFAULT 0,
+            clinician_confirmed_label TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY(patient_id) REFERENCES users(id) ON DELETE CASCADE
         );
@@ -178,6 +176,8 @@ def ensure_user_columns() -> None:
     }
     if "mobile_number" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN mobile_number TEXT")
+    if "gender" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN gender TEXT DEFAULT 'unspecified'")
 
 
 def ensure_report_columns() -> None:
@@ -199,6 +199,14 @@ def ensure_report_columns() -> None:
             "quality_flags_json",
             "TEXT NOT NULL DEFAULT '[]'",
         ),
+        (
+            "consented_for_training",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "clinician_confirmed_label",
+            "TEXT",
+        ),
     ]
     for column_name, column_sql in missing_columns:
         if column_name not in columns:
@@ -217,12 +225,13 @@ def ensure_default_doctor() -> None:
     doctor_password = os.environ.get("DOCTOR_PASSWORD", "doctor123")
     db.execute(
         """
-        INSERT INTO users (full_name, mobile_number, username, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, 'doctor', ?)
+        INSERT INTO users (full_name, mobile_number, gender, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, 'doctor', ?)
         """,
         (
             "Dr. Portal",
             None,
+            "unspecified",
             doctor_username,
             generate_password_hash(doctor_password),
             utc_now(),
@@ -275,6 +284,10 @@ def hydrate_report(row):
     report["quality_flags"] = json.loads(report.pop("quality_flags_json", "[]") or "[]")
     report["quality_status"] = report.get("quality_status") or "accepted"
     report["needs_retake"] = bool(report.get("needs_retake", 0))
+    report["consented_for_training"] = bool(report.get("consented_for_training", 0))
+    report["clinician_confirmed_label"] = (
+        report.get("clinician_confirmed_label") or "unconfirmed"
+    )
     return report
 
 
@@ -329,6 +342,7 @@ def list_patient_summaries():
             users.id,
             users.full_name,
             users.mobile_number,
+            users.gender,
             users.username,
             users.created_at,
             COUNT(reports.id) AS report_count,
@@ -376,7 +390,12 @@ def generate_patient_identifier(full_name: str, mobile_number: str) -> str:
     return f"{prefix}{mobile_number[-4:]}"
 
 
-def create_patient_record(full_name: str, mobile_number: str, password: str) -> dict:
+def create_patient_record(
+    full_name: str,
+    mobile_number: str,
+    password: str,
+    gender: str = "unspecified",
+) -> dict:
     cleaned_name = " ".join(full_name.split())
     if not cleaned_name:
         raise ValueError("Patient name is required.")
@@ -386,6 +405,7 @@ def create_patient_record(full_name: str, mobile_number: str, password: str) -> 
         raise ValueError("Mobile number must contain at least 10 digits.")
     if len(password) < 6:
         raise ValueError("Patient password must be at least 6 characters long.")
+    normalized_gender = normalize_gender(gender)
 
     patient_identifier = generate_patient_identifier(cleaned_name, normalized_mobile)
     db = get_db()
@@ -400,12 +420,13 @@ def create_patient_record(full_name: str, mobile_number: str, password: str) -> 
 
     cursor = db.execute(
         """
-        INSERT INTO users (full_name, mobile_number, username, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, 'patient', ?)
+        INSERT INTO users (full_name, mobile_number, gender, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, 'patient', ?)
         """,
         (
             cleaned_name,
             normalized_mobile,
+            normalized_gender,
             patient_identifier,
             generate_password_hash(password),
             utc_now(),
@@ -426,7 +447,12 @@ def delete_patient_record(patient_id: int) -> dict | None:
     return patient
 
 
-def save_report(patient_id: int, source_filename: str, report_data: dict):
+def save_report(
+    patient_id: int,
+    source_filename: str,
+    report_data: dict,
+    consented_for_training: bool = False,
+):
     db = get_db()
     cursor = db.execute(
         """
@@ -447,9 +473,11 @@ def save_report(patient_id: int, source_filename: str, report_data: dict):
             quality_status,
             needs_retake,
             quality_flags_json,
+            consented_for_training,
+            clinician_confirmed_label,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             patient_id,
@@ -468,6 +496,8 @@ def save_report(patient_id: int, source_filename: str, report_data: dict):
             report_data["quality_status"],
             int(report_data["needs_retake"]),
             json.dumps(report_data["quality_flags"]),
+            int(bool(consented_for_training)),
+            "unconfirmed",
             utc_now(),
         ),
     )
@@ -529,22 +559,14 @@ def login_required(role: str | None = None):
 
 
 def infer_prediction(feature_frame):
-    if prediction_pipeline is not None:
-        model_frame = feature_frame[selected_model_features]
-        probabilities = prediction_pipeline.predict_proba(model_frame)[0]
-        prediction = int(float(probabilities[1]) >= prediction_threshold)
-        return prediction, probabilities
-
-    scaled_vector = legacy_scaler.transform(feature_frame)
-    if legacy_rfe_selector is not None:
-        scaled_vector = legacy_rfe_selector.transform(scaled_vector)
-    prediction = int(legacy_model.predict(scaled_vector)[0])
-    probabilities = legacy_model.predict_proba(scaled_vector)[0]
+    model_frame = feature_frame[selected_model_features]
+    probabilities = prediction_pipeline.predict_proba(model_frame)[0]
+    prediction = int(float(probabilities[1]) >= prediction_threshold)
     return prediction, probabilities
 
 
-def run_prediction(audio_path: str) -> dict:
-    features_dict = extract_features(audio_path)
+def run_prediction(audio_path: str, gender: str | None = None) -> dict:
+    features_dict = extract_features(audio_path, gender=gender)
     feature_frame = pd.DataFrame(
         [{name: features_dict[name] for name in ALL_FEATURES}],
         columns=ALL_FEATURES,
@@ -679,7 +701,7 @@ def assess_report_quality(
     }
 
 
-def analyze_voice_sample(audio_path: str) -> dict:
+def analyze_voice_sample(audio_path: str, gender: str | None = None) -> dict:
     segment_paths, cleanup_paths = split_audio_segments(audio_path)
     segment_results = []
     skipped_segments = []
@@ -687,7 +709,7 @@ def analyze_voice_sample(audio_path: str) -> dict:
     try:
         for index, segment_path in enumerate(segment_paths, start=1):
             try:
-                segment_result = run_prediction(segment_path)
+                segment_result = run_prediction(segment_path, gender=gender)
                 segment_result["segment_index"] = index
                 segment_results.append(segment_result)
             except ValueError as exc:
@@ -698,13 +720,21 @@ def analyze_voice_sample(audio_path: str) -> dict:
                 raise ValueError(skipped_segments[0]["reason"])
             raise ValueError("The uploaded audio could not be analyzed.")
 
-        healthy_probability = float(
-            np.mean([item["probabilities"]["healthy"] for item in segment_results])
-        )
+        if len(segment_results) < app.config["MIN_VALID_SEGMENTS"]:
+            raise ValueError(
+                f"At least {app.config['MIN_VALID_SEGMENTS']} valid voice segments are required for analysis. "
+                "Please record a longer, steadier sample in a quiet room."
+            )
+
+        weights = [max(item.get("confidence_gap", 0.01), 0.01) for item in segment_results]
         parkinsons_probability = float(
-            np.mean([item["probabilities"]["parkinsons"] for item in segment_results])
+            np.average(
+                [item["probabilities"]["parkinsons"] for item in segment_results],
+                weights=weights,
+            )
         )
-        prediction = int(parkinsons_probability >= healthy_probability)
+        healthy_probability = float(1.0 - parkinsons_probability)
+        prediction = int(parkinsons_probability >= prediction_threshold)
         stability = float(
             np.mean([item["prediction"] == prediction for item in segment_results])
         )
@@ -856,6 +886,7 @@ def patient_dashboard():
 def doctor_create_patient():
     full_name = request.form.get("full_name", "").strip()
     mobile_number = request.form.get("mobile_number", "").strip()
+    gender = normalize_gender(request.form.get("gender"))
     password = request.form.get("password", "")
     confirm_password = request.form.get("confirm_password", "")
 
@@ -868,7 +899,7 @@ def doctor_create_patient():
         return redirect(url_for("doctor_dashboard"))
 
     try:
-        patient = create_patient_record(full_name, mobile_number, password)
+        patient = create_patient_record(full_name, mobile_number, password, gender=gender)
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(url_for("doctor_dashboard"))
@@ -941,6 +972,7 @@ def doctor_create_patient_report(patient_id: int):
     audio_file = request.files["audio"]
     if audio_file.filename == "":
         return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    consented_for_training = request.form.get("consent_training") == "1"
 
     filename = secure_filename(audio_file.filename) or "voice_sample.wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(filename)) as temp:
@@ -948,8 +980,13 @@ def doctor_create_patient_report(patient_id: int):
         temp_path = temp.name
 
     try:
-        report_data = analyze_voice_sample(temp_path)
-        saved_report = save_report(patient_id, filename, report_data)
+        report_data = analyze_voice_sample(temp_path, gender=patient.get("gender"))
+        saved_report = save_report(
+            patient_id,
+            filename,
+            report_data,
+            consented_for_training=consented_for_training,
+        )
         return jsonify(
             {
                 "message": "Report generated and saved successfully.",
@@ -975,6 +1012,7 @@ def create_report():
     audio_file = request.files["audio"]
     if audio_file.filename == "":
         return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    consented_for_training = request.form.get("consent_training") == "1"
 
     filename = secure_filename(audio_file.filename) or "voice_sample.wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(filename)) as temp:
@@ -982,8 +1020,13 @@ def create_report():
         temp_path = temp.name
 
     try:
-        report_data = analyze_voice_sample(temp_path)
-        saved_report = save_report(g.user["id"], filename, report_data)
+        report_data = analyze_voice_sample(temp_path, gender=g.user.get("gender"))
+        saved_report = save_report(
+            g.user["id"],
+            filename,
+            report_data,
+            consented_for_training=consented_for_training,
+        )
         return jsonify(
             {
                 "message": "Report generated and saved successfully.",
@@ -1000,6 +1043,61 @@ def create_report():
             os.unlink(temp_path)
 
 
+@app.route("/api/reports/<int:report_id>/confirm", methods=["PATCH"])
+@login_required(role="doctor")
+def confirm_report(report_id: int):
+    report = get_report_by_id(report_id)
+    if report is None:
+        return jsonify({"error": "Report was not found."}), 404
+
+    payload = request.get_json(silent=True) or request.form
+    clinician_label = normalize_clinician_label(payload.get("clinician_confirmed_label"))
+    if not clinician_label:
+        return jsonify({"error": "Invalid clinician confirmation label."}), 400
+
+    db = get_db()
+    db.execute(
+        "UPDATE reports SET clinician_confirmed_label = ? WHERE id = ?",
+        (clinician_label, report_id),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "message": "Clinician confirmation updated successfully.",
+            "report": get_report_by_id(report_id),
+        }
+    )
+
+
+@app.route("/api/export-training-data", methods=["GET"])
+@login_required(role="doctor")
+def export_training_data():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT features_json, clinician_confirmed_label
+        FROM reports
+        WHERE consented_for_training = 1
+          AND clinician_confirmed_label IN ('confirmed_pd', 'confirmed_healthy')
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+
+    records = []
+    for row in rows:
+        label = 1 if row["clinician_confirmed_label"] == "confirmed_pd" else 0
+        records.append(
+            {
+                "features": json.loads(row["features_json"] or "{}"),
+                "label": label,
+            }
+        )
+
+    response = jsonify(records)
+    response.headers["X-Record-Count"] = str(len(records))
+    return response
+
+
 @app.route("/stream-chunk", methods=["POST"])
 def stream_chunk():
     if "audio" not in request.files:
@@ -1011,7 +1109,7 @@ def stream_chunk():
         temp_path = temp.name
 
     try:
-        result = run_prediction(temp_path)
+        result = run_prediction(temp_path, gender=normalize_gender(request.form.get("gender")))
         return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc), "skip": True}), 200
@@ -1034,7 +1132,10 @@ def analyze_voice():
         temp_path = temp.name
 
     try:
-        result = analyze_voice_sample(temp_path)
+        result = analyze_voice_sample(
+            temp_path,
+            gender=normalize_gender(request.form.get("gender")),
+        )
         return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400

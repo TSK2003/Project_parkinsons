@@ -1,9 +1,10 @@
+import librosa
 import nolds
 import numpy as np
 import parselmouth
 from parselmouth.praat import call
 from scipy.linalg import toeplitz
-from scipy.signal import resample_poly
+from scipy.signal import resample_poly, wiener
 
 MIN_DURATION_SECONDS = 2.0
 MIN_RMS = 0.002
@@ -12,8 +13,6 @@ MIN_VOICED_FRAMES = 20
 MAX_CLIPPED_FRACTION = 0.01
 
 TARGET_SAMPLE_RATE = 44100
-PITCH_FLOOR = 75
-PITCH_CEILING = 600
 PITCH_STRENGTH_FLOOR = 0.18
 PITCH_FRAME_STEP_SECONDS = 0.01
 MAX_UNVOICED_GAP_FRAMES = 10
@@ -27,13 +26,68 @@ LINEAR_PREDICTION_ORDER = 4
 MAX_NONLINEAR_SAMPLES = 1500
 C3_HZ = 130.81278265
 
+TRADITIONAL_FEATURE_NAMES = [
+    "MDVP:Fo(Hz)",
+    "MDVP:Fhi(Hz)",
+    "MDVP:Flo(Hz)",
+    "MDVP:Jitter(%)",
+    "MDVP:Jitter(Abs)",
+    "MDVP:RAP",
+    "MDVP:PPQ",
+    "Jitter:DDP",
+    "MDVP:Shimmer",
+    "MDVP:Shimmer(dB)",
+    "Shimmer:APQ3",
+    "Shimmer:APQ5",
+    "MDVP:APQ",
+    "Shimmer:DDA",
+    "NHR",
+    "HNR",
+]
 
-def extract_features(audio_path: str) -> dict:
+NONLINEAR_FEATURE_NAMES = [
+    "RPDE",
+    "DFA",
+    "spread1",
+    "spread2",
+    "D2",
+    "PPE",
+]
+
+MFCC_FEATURE_NAMES = [
+    key
+    for index in range(1, 14)
+    for key in (
+        f"MFCC_{index}_mean",
+        f"MFCC_{index}_std",
+        f"MFCC_{index}_delta_mean",
+    )
+]
+
+ALL_FEATURE_NAMES = TRADITIONAL_FEATURE_NAMES + NONLINEAR_FEATURE_NAMES + MFCC_FEATURE_NAMES
+
+
+def _get_pitch_range(gender=None):
+    if gender == "male":
+        return 75, 300
+    if gender == "female":
+        return 150, 500
+    return 65, 500
+
+
+def extract_features(audio_path: str, gender: str | None = None) -> dict:
     sound = parselmouth.Sound(audio_path)
     if sound.n_channels > 1:
         sound = sound.convert_to_mono()
 
     raw_waveform = np.asarray(sound.values).reshape(-1).astype(np.float64)
+    raw_waveform = np.nan_to_num(
+        wiener(raw_waveform.astype(np.float64)),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    ).astype(np.float32)
+    sound = parselmouth.Sound(raw_waveform, sound.sampling_frequency)
     duration = float(sound.duration)
     if duration < MIN_DURATION_SECONDS:
         raise ValueError(
@@ -53,20 +107,16 @@ def extract_features(audio_path: str) -> dict:
         )
 
     prepared_sound = _normalize_and_resample(sound)
-    voiced_sound, voiced_pitch = _extract_longest_voiced_region(prepared_sound)
+    voiced_sound, voiced_pitch = _extract_longest_voiced_region(prepared_sound, gender=gender)
 
-    traditional_sound = voiced_sound
-    if voiced_sound.duration >= 3.0:
-        traditional_sound = voiced_sound.extract_part(
-            0.0,
-            voiced_sound.duration / 2.0,
-            preserve_times=False,
-        )
-
-    traditional_features = _extract_traditional_features(traditional_sound)
+    traditional_features = _extract_traditional_features(voiced_sound, gender=gender)
     nonlinear_features = _extract_nonlinear_features(voiced_sound, voiced_pitch)
+    mfcc_features = _extract_mfcc_features(
+        np.asarray(voiced_sound.values).reshape(-1),
+        int(round(voiced_sound.sampling_frequency)),
+    )
 
-    return traditional_features | nonlinear_features
+    return traditional_features | nonlinear_features | mfcc_features
 
 
 def _normalize_and_resample(sound: parselmouth.Sound) -> parselmouth.Sound:
@@ -87,8 +137,10 @@ def _normalize_and_resample(sound: parselmouth.Sound) -> parselmouth.Sound:
 
 def _extract_longest_voiced_region(
     sound: parselmouth.Sound,
+    gender: str | None = None,
 ) -> tuple[parselmouth.Sound, parselmouth.Pitch]:
-    pitch = call(sound, "To Pitch", 0.0, PITCH_FLOOR, PITCH_CEILING)
+    pitch_floor, pitch_ceiling = _get_pitch_range(gender)
+    pitch = call(sound, "To Pitch", 0.0, pitch_floor, pitch_ceiling)
     pitch_array = pitch.selected_array
     frequencies = np.asarray(pitch_array["frequency"], dtype=np.float64)
     strengths = np.asarray(pitch_array["strength"], dtype=np.float64)
@@ -125,7 +177,7 @@ def _extract_longest_voiced_region(
     start_time = max(float(times[start_index]) - margin, 0.0)
     end_time = min(float(times[end_index]) + margin, float(sound.duration))
     voiced_sound = sound.extract_part(start_time, end_time, preserve_times=False)
-    voiced_pitch = call(voiced_sound, "To Pitch", 0.0, PITCH_FLOOR, PITCH_CEILING)
+    voiced_pitch = call(voiced_sound, "To Pitch", 0.0, pitch_floor, pitch_ceiling)
     return voiced_sound, voiced_pitch
 
 
@@ -171,13 +223,13 @@ def _fill_short_false_runs(mask: np.ndarray, max_gap: int) -> np.ndarray:
     return bridged_mask
 
 
-def _extract_traditional_features(sound: parselmouth.Sound) -> dict:
-    # The original Parkinson's dataset was computed from amplitude-normalized
-    # signals sampled at 44.1 kHz, and the paper explicitly used the first half
-    # of each sustained phonation for the traditional perturbation measures.
-    # Using the same setup reduces the train/runtime feature mismatch.
-    pitch = call(sound, "To Pitch", 0.0, PITCH_FLOOR, PITCH_CEILING)
-    point_process = call(sound, "To PointProcess (periodic, cc)", PITCH_FLOOR, PITCH_CEILING)
+def _extract_traditional_features(
+    sound: parselmouth.Sound,
+    gender: str | None = None,
+) -> dict:
+    pitch_floor, pitch_ceiling = _get_pitch_range(gender)
+    pitch = call(sound, "To Pitch", 0.0, pitch_floor, pitch_ceiling)
+    point_process = call(sound, "To PointProcess (periodic, cc)", pitch_floor, pitch_ceiling)
 
     fo = _safe(call(pitch, "Get mean", 0, 0, "Hertz"), None)
     fhi = _safe(call(pitch, "Get maximum", 0, 0, "Hertz", "Parabolic"), None)
@@ -201,7 +253,7 @@ def _extract_traditional_features(sound: parselmouth.Sound) -> dict:
         dda = apq3 * 3.0
 
     try:
-        harmonicity = call(sound, "To Harmonicity (cc)", 0.01, PITCH_FLOOR, 0.1, 1.0)
+        harmonicity = call(sound, "To Harmonicity (cc)", 0.01, pitch_floor, 0.1, 1.0)
         hnr = _safe(call(harmonicity, "Get mean", 0, 0), None)
     except Exception:
         hnr = None
@@ -252,6 +304,25 @@ def _extract_traditional_features(sound: parselmouth.Sound) -> dict:
         "NHR": round(nhr, 5),
         "HNR": round(hnr, 5),
     }
+
+
+def _extract_mfcc_features(audio_array, sr):
+    """
+    Extract 13 MFCC coefficients (mean + std each + delta mean).
+    MFCCs capture vocal tract shape and complement the classic
+    Parkinson's perturbation and nonlinear biomarkers.
+    """
+    audio_array = np.asarray(audio_array, dtype=np.float32)
+    sample_rate = int(sr)
+
+    mfccs = librosa.feature.mfcc(y=audio_array, sr=sample_rate, n_mfcc=13)
+    delta_mfccs = librosa.feature.delta(mfccs)
+    result = {}
+    for index in range(13):
+        result[f"MFCC_{index + 1}_mean"] = float(np.mean(mfccs[index]))
+        result[f"MFCC_{index + 1}_std"] = float(np.std(mfccs[index]))
+        result[f"MFCC_{index + 1}_delta_mean"] = float(np.mean(delta_mfccs[index]))
+    return result
 
 
 def _extract_nonlinear_features(
