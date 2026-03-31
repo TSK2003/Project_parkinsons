@@ -11,6 +11,7 @@ MIN_RMS = 0.002
 MIN_VOICED_SECONDS = 0.7
 MIN_VOICED_FRAMES = 20
 MAX_CLIPPED_FRACTION = 0.01
+WIENER_VARIANCE_FLOOR = 1e-12
 
 TARGET_SAMPLE_RATE = 44100
 PITCH_STRENGTH_FLOOR = 0.18
@@ -81,13 +82,6 @@ def extract_features(audio_path: str, gender: str | None = None) -> dict:
         sound = sound.convert_to_mono()
 
     raw_waveform = np.asarray(sound.values).reshape(-1).astype(np.float64)
-    raw_waveform = np.nan_to_num(
-        wiener(raw_waveform.astype(np.float64)),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    ).astype(np.float32)
-    sound = parselmouth.Sound(raw_waveform, sound.sampling_frequency)
     duration = float(sound.duration)
     if duration < MIN_DURATION_SECONDS:
         raise ValueError(
@@ -106,6 +100,8 @@ def extract_features(audio_path: str, gender: str | None = None) -> dict:
             "The voice sample is clipped or distorted. Please reduce microphone gain and record again."
         )
 
+    raw_waveform = _denoise_waveform(raw_waveform)
+    sound = parselmouth.Sound(raw_waveform, sound.sampling_frequency)
     prepared_sound = _normalize_and_resample(sound)
     voiced_sound, voiced_pitch = _extract_longest_voiced_region(prepared_sound, gender=gender)
 
@@ -117,6 +113,27 @@ def extract_features(audio_path: str, gender: str | None = None) -> dict:
     )
 
     return traditional_features | nonlinear_features | mfcc_features
+
+
+def _denoise_waveform(waveform: np.ndarray) -> np.ndarray:
+    cleaned_waveform = np.nan_to_num(
+        np.asarray(waveform, dtype=np.float64),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    if (
+        cleaned_waveform.size < 3
+        or float(np.var(cleaned_waveform)) <= WIENER_VARIANCE_FLOOR
+    ):
+        return cleaned_waveform.astype(np.float32)
+
+    return np.nan_to_num(
+        wiener(cleaned_waveform),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    ).astype(np.float32)
 
 
 def _normalize_and_resample(sound: parselmouth.Sound) -> parselmouth.Sound:

@@ -63,6 +63,18 @@ model_metadata = {}
 selected_model_features = ALL_FEATURES
 prediction_threshold = 0.5
 
+
+def force_single_thread_inference(estimator) -> None:
+    if hasattr(estimator, "steps"):
+        for _, step in estimator.steps:
+            force_single_thread_inference(step)
+
+    if hasattr(estimator, "n_jobs"):
+        try:
+            estimator.set_params(n_jobs=1)
+        except Exception:
+            estimator.n_jobs = 1
+
 if os.path.exists(MODEL_METADATA_PATH):
     with open(MODEL_METADATA_PATH, "r", encoding="utf-8") as handle:
         model_metadata = json.load(handle)
@@ -76,6 +88,7 @@ if not os.path.exists(MODEL_PIPELINE_PATH):
     )
 
 prediction_pipeline = joblib.load(MODEL_PIPELINE_PATH)
+force_single_thread_inference(prediction_pipeline)
 
 trained_sklearn = model_metadata.get("sklearn_version")
 current_sklearn = sklearn.__version__
