@@ -29,7 +29,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
+DEFAULT_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
+MERGED_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons_merged.data")
+ALIGNED_MERGED_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons_merged_aligned.data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 EVAL_DIR = os.path.join(MODELS_DIR, "evaluation")
 
@@ -296,8 +298,14 @@ def validate_feature_subsets(feature_names: list[str]) -> None:
 
 
 def extract_subject_ids(names: pd.Series) -> pd.Series:
-    subject_ids = names.str.extract(r"^(phon_R\d+_S\d+)")[0]
-    return subject_ids.fillna(names)
+    def derive_subject_id(name: str) -> str:
+        stem = os.path.splitext(str(name))[0]
+        parts = stem.split("_")
+        if len(parts) >= 3 and parts[0] == "phon" and parts[1].startswith("R") and parts[2].startswith("S"):
+            return "_".join(parts[:3])
+        return stem
+
+    return names.fillna("").map(derive_subject_id)
 
 
 def aggregate_subject_predictions(prediction_rows: list[dict]) -> pd.DataFrame:
@@ -633,13 +641,23 @@ def relative_path(path: str) -> str:
     return os.path.relpath(path, BASE_DIR)
 
 
+def resolve_dataset_path() -> str:
+    if os.path.exists(ALIGNED_MERGED_DATA_PATH):
+        return ALIGNED_MERGED_DATA_PATH
+    if os.path.exists(MERGED_DATA_PATH):
+        return MERGED_DATA_PATH
+    return DEFAULT_DATA_PATH
+
+
 def main() -> None:
     print("=" * 72)
     print("Parkinson's Disease Training Pipeline - Subset + Threshold Tuning")
     print("=" * 72)
 
     print("\n[1/7] Loading dataset and deriving subject groups...")
-    df = pd.read_csv(DATA_PATH)
+    dataset_path = resolve_dataset_path()
+    print(f"Using dataset          : {dataset_path}")
+    df = pd.read_csv(dataset_path)
     df["subject_id"] = extract_subject_ids(df["name"])
     subject_status = df.groupby("subject_id")["status"].first()
 
@@ -834,6 +852,7 @@ def main() -> None:
         "training_mode": "subject_grouped_subset_threshold_tuning_with_smote",
         "scoring_metric": "balanced_accuracy_with_pd_recall_floor",
         "sklearn_version": sklearn.__version__,
+        "dataset_path_used": relative_path(dataset_path),
         "outer_splits": OUTER_SPLITS,
         "inner_splits": INNER_SPLITS,
         "decision_threshold": round(float(final_choice["threshold"]), 4),

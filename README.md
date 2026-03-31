@@ -9,11 +9,13 @@ Flask-based portal for Parkinson's voice screening with doctor-managed patient a
 - A trained model artifact at `models/prediction_pipeline.pkl`
 
 ## Setup
-
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\activate
 pip install -r requirements.txt
+$env:LOKY_MAX_CPU_COUNT=8
+python verify_setup.py
+python merge_datasets.py
 python train_model.py
 python app.py
 ```
