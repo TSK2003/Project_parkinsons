@@ -52,6 +52,32 @@
     </div>
   </div>
 
+  <div class="report-meta-grid">
+    <div class="meta-chip">
+      <span>Training consent</span>
+      <strong>{{ "Consented" if report.consented_for_training else "Not consented" }}</strong>
+    </div>
+    <div class="meta-chip">
+      <span>Clinician label</span>
+      <strong>{{ report.clinician_confirmed_label|replace('_', ' ')|title }}</strong>
+    </div>
+  </div>
+
+  {% if show_confirmation_controls %}
+    <form class="report-confirm-form action-row" data-report-id="{{ report.id }}" data-endpoint="{{ url_for('confirm_report', report_id=report.id) }}">
+      <label class="field compact-field">
+        <span>Clinician confirmation</span>
+        <select name="clinician_confirmed_label">
+          <option value="unconfirmed" {% if report.clinician_confirmed_label == 'unconfirmed' %}selected{% endif %}>Unconfirmed</option>
+          <option value="confirmed_pd" {% if report.clinician_confirmed_label == 'confirmed_pd' %}selected{% endif %}>Confirmed PD</option>
+          <option value="confirmed_healthy" {% if report.clinician_confirmed_label == 'confirmed_healthy' %}selected{% endif %}>Confirmed Healthy</option>
+        </select>
+      </label>
+      <button class="btn btn-secondary btn-compact" type="submit">Save Label</button>
+      <span class="inline-status report-confirm-status">Awaiting clinician review.</span>
+    </form>
+  {% endif %}
+
   <details class="details-card">
     <summary>View biomarkers and segment votes</summary>
 

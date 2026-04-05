@@ -6,8 +6,10 @@ from datetime import datetime
 from functools import wraps
 
 import joblib
+import librosa
 import numpy as np
 import pandas as pd
+import sklearn
 from flask import (
     Flask,
     abort,
@@ -25,7 +27,7 @@ from scipy.io import wavfile
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-from feature_extractor import extract_features
+from feature_extractor import ALL_FEATURE_NAMES, extract_features
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -34,34 +36,20 @@ DATABASE_PATH = os.path.join(DATA_DIR, "portal.db")
 
 MODEL_PIPELINE_PATH = os.path.join(MODELS_DIR, "prediction_pipeline.pkl")
 MODEL_METADATA_PATH = os.path.join(MODELS_DIR, "model_metadata.json")
-LEGACY_MODEL_PATH = os.path.join(MODELS_DIR, "parkinsons_model.pkl")
-LEGACY_SCALER_PATH = os.path.join(MODELS_DIR, "scaler.pkl")
-LEGACY_RFE_PATH = os.path.join(MODELS_DIR, "rfe_selector.pkl")
 
-ALL_FEATURES = [
-    "MDVP:Fo(Hz)",
-    "MDVP:Fhi(Hz)",
-    "MDVP:Flo(Hz)",
-    "MDVP:Jitter(%)",
-    "MDVP:Jitter(Abs)",
-    "MDVP:RAP",
-    "MDVP:PPQ",
-    "Jitter:DDP",
-    "MDVP:Shimmer",
-    "MDVP:Shimmer(dB)",
-    "Shimmer:APQ3",
-    "Shimmer:APQ5",
-    "MDVP:APQ",
-    "Shimmer:DDA",
-    "NHR",
-    "HNR",
-    "RPDE",
-    "DFA",
-    "spread1",
-    "spread2",
-    "D2",
-    "PPE",
-]
+ALL_FEATURES = list(ALL_FEATURE_NAMES)
+ALLOWED_GENDERS = {"male", "female", "unspecified"}
+ALLOWED_CLINICIAN_LABELS = {"confirmed_pd", "confirmed_healthy", "unconfirmed"}
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".flac",
+    ".mp4",
+    ".webm",
+}
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "parkinsons-portal-dev-key")
@@ -70,7 +58,7 @@ app.config["SEGMENT_SECONDS"] = float(os.environ.get("SEGMENT_SECONDS", "3.0"))
 app.config["SEGMENT_OVERLAP_SECONDS"] = float(
     os.environ.get("SEGMENT_OVERLAP_SECONDS", "1.0")
 )
-app.config["MIN_VALID_SEGMENTS"] = int(os.environ.get("MIN_VALID_SEGMENTS", "2"))
+app.config["MIN_VALID_SEGMENTS"] = int(os.environ.get("MIN_VALID_SEGMENTS", "3"))
 app.config["MAX_SKIPPED_SEGMENT_RATIO"] = float(
     os.environ.get("MAX_SKIPPED_SEGMENT_RATIO", "0.34")
 )
@@ -82,32 +70,113 @@ app.config["MIN_CONFIDENCE_GAP"] = float(
 )
 CORS(app)
 
-prediction_pipeline = None
-legacy_model = None
-legacy_scaler = None
-legacy_rfe_selector = None
 model_metadata = {}
 selected_model_features = ALL_FEATURES
 prediction_threshold = 0.5
+uses_gender_specific_extraction = False
+
+
+def force_single_thread_inference(estimator) -> None:
+    if hasattr(estimator, "steps"):
+        for _, step in estimator.steps:
+            force_single_thread_inference(step)
+
+    if hasattr(estimator, "n_jobs"):
+        try:
+            estimator.set_params(n_jobs=1)
+        except Exception:
+            estimator.n_jobs = 1
 
 if os.path.exists(MODEL_METADATA_PATH):
     with open(MODEL_METADATA_PATH, "r", encoding="utf-8") as handle:
         model_metadata = json.load(handle)
     selected_model_features = model_metadata.get("selected_features", ALL_FEATURES)
     prediction_threshold = float(model_metadata.get("decision_threshold", 0.5))
+    uses_gender_specific_extraction = bool(
+        model_metadata.get("uses_gender_specific_extraction", False)
+    )
 
-if os.path.exists(MODEL_PIPELINE_PATH):
-    prediction_pipeline = joblib.load(MODEL_PIPELINE_PATH)
-else:
-    legacy_model = joblib.load(LEGACY_MODEL_PATH)
-    legacy_scaler = joblib.load(LEGACY_SCALER_PATH)
-    legacy_rfe_selector = (
-        joblib.load(LEGACY_RFE_PATH) if os.path.exists(LEGACY_RFE_PATH) else None
+if not os.path.exists(MODEL_PIPELINE_PATH):
+    raise FileNotFoundError(
+        f"Primary model not found at {MODEL_PIPELINE_PATH}. "
+        "Run `python train_model.py` to generate it."
+    )
+
+prediction_pipeline = joblib.load(MODEL_PIPELINE_PATH)
+force_single_thread_inference(prediction_pipeline)
+
+trained_sklearn = model_metadata.get("sklearn_version")
+current_sklearn = sklearn.__version__
+if trained_sklearn and trained_sklearn != current_sklearn:
+    app.logger.warning(
+        f"Model was trained with scikit-learn {trained_sklearn} "
+        f"but current version is {current_sklearn}. "
+        "Consider retraining to avoid compatibility issues."
     )
 
 
 def utc_now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def normalize_gender(gender: str | None) -> str:
+    if gender is None:
+        return "unspecified"
+    cleaned = gender.strip().lower()
+    return cleaned if cleaned in ALLOWED_GENDERS else "unspecified"
+
+
+def normalize_clinician_label(label: str | None) -> str:
+    if label is None:
+        return "unconfirmed"
+    cleaned = label.strip().lower()
+    return cleaned if cleaned in ALLOWED_CLINICIAN_LABELS else ""
+
+
+def ensure_supported_audio_file(filename: str) -> None:
+    _, ext = os.path.splitext(filename or "")
+    suffix = ext.lower() or ".wav"
+    if suffix not in SUPPORTED_AUDIO_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
+        raise ValueError(
+            f"Unsupported audio format '{suffix}'. Please upload one of: {allowed}."
+        )
+
+
+def normalize_audio_for_analysis(audio_path: str) -> tuple[str, list[str]]:
+    _, ext = os.path.splitext(audio_path)
+    suffix = ext.lower() or ".wav"
+
+    if suffix == ".wav":
+        return audio_path, []
+
+    if suffix not in SUPPORTED_AUDIO_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
+        raise ValueError(
+            f"Unsupported audio format '{suffix}'. Please upload one of: {allowed}."
+        )
+
+    try:
+        audio_data, sample_rate = librosa.load(audio_path, sr=None, mono=False)
+    except Exception as exc:
+        raise ValueError(
+            "The uploaded audio could not be decoded. Please try WAV, MP3, M4A, AAC, OGG, FLAC, MP4, or WebM."
+        ) from exc
+
+    if sample_rate is None or int(sample_rate) <= 0:
+        raise ValueError("The uploaded audio file does not have a valid sample rate.")
+
+    if getattr(audio_data, "ndim", 1) > 1:
+        audio_data = np.mean(audio_data, axis=0)
+
+    audio_data = np.asarray(audio_data, dtype=np.float32)
+    if audio_data.size == 0 or not np.isfinite(audio_data).all():
+        raise ValueError("The uploaded audio file could not be normalized for analysis.")
+
+    audio_data = np.clip(audio_data, -1.0, 1.0)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        wavfile.write(temp_file.name, int(sample_rate), audio_data)
+        return temp_file.name, [temp_file.name]
 
 
 def get_db() -> sqlite3.Connection:
@@ -135,6 +204,7 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             full_name TEXT NOT NULL,
             mobile_number TEXT,
+            gender TEXT NOT NULL DEFAULT 'unspecified',
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT,
             role TEXT NOT NULL CHECK(role IN ('patient', 'doctor')),
@@ -159,6 +229,8 @@ def init_db() -> None:
             quality_status TEXT NOT NULL DEFAULT 'accepted',
             needs_retake INTEGER NOT NULL DEFAULT 0,
             quality_flags_json TEXT NOT NULL DEFAULT '[]',
+            consented_for_training INTEGER NOT NULL DEFAULT 0,
+            clinician_confirmed_label TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY(patient_id) REFERENCES users(id) ON DELETE CASCADE
         );
@@ -178,6 +250,8 @@ def ensure_user_columns() -> None:
     }
     if "mobile_number" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN mobile_number TEXT")
+    if "gender" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN gender TEXT DEFAULT 'unspecified'")
 
 
 def ensure_report_columns() -> None:
@@ -199,6 +273,14 @@ def ensure_report_columns() -> None:
             "quality_flags_json",
             "TEXT NOT NULL DEFAULT '[]'",
         ),
+        (
+            "consented_for_training",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "clinician_confirmed_label",
+            "TEXT",
+        ),
     ]
     for column_name, column_sql in missing_columns:
         if column_name not in columns:
@@ -217,12 +299,13 @@ def ensure_default_doctor() -> None:
     doctor_password = os.environ.get("DOCTOR_PASSWORD", "doctor123")
     db.execute(
         """
-        INSERT INTO users (full_name, mobile_number, username, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, 'doctor', ?)
+        INSERT INTO users (full_name, mobile_number, gender, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, 'doctor', ?)
         """,
         (
             "Dr. Portal",
             None,
+            "unspecified",
             doctor_username,
             generate_password_hash(doctor_password),
             utc_now(),
@@ -275,6 +358,10 @@ def hydrate_report(row):
     report["quality_flags"] = json.loads(report.pop("quality_flags_json", "[]") or "[]")
     report["quality_status"] = report.get("quality_status") or "accepted"
     report["needs_retake"] = bool(report.get("needs_retake", 0))
+    report["consented_for_training"] = bool(report.get("consented_for_training", 0))
+    report["clinician_confirmed_label"] = (
+        report.get("clinician_confirmed_label") or "unconfirmed"
+    )
     return report
 
 
@@ -329,6 +416,7 @@ def list_patient_summaries():
             users.id,
             users.full_name,
             users.mobile_number,
+            users.gender,
             users.username,
             users.created_at,
             COUNT(reports.id) AS report_count,
@@ -376,7 +464,12 @@ def generate_patient_identifier(full_name: str, mobile_number: str) -> str:
     return f"{prefix}{mobile_number[-4:]}"
 
 
-def create_patient_record(full_name: str, mobile_number: str, password: str) -> dict:
+def create_patient_record(
+    full_name: str,
+    mobile_number: str,
+    password: str,
+    gender: str = "unspecified",
+) -> dict:
     cleaned_name = " ".join(full_name.split())
     if not cleaned_name:
         raise ValueError("Patient name is required.")
@@ -386,6 +479,7 @@ def create_patient_record(full_name: str, mobile_number: str, password: str) -> 
         raise ValueError("Mobile number must contain at least 10 digits.")
     if len(password) < 6:
         raise ValueError("Patient password must be at least 6 characters long.")
+    normalized_gender = normalize_gender(gender)
 
     patient_identifier = generate_patient_identifier(cleaned_name, normalized_mobile)
     db = get_db()
@@ -400,12 +494,13 @@ def create_patient_record(full_name: str, mobile_number: str, password: str) -> 
 
     cursor = db.execute(
         """
-        INSERT INTO users (full_name, mobile_number, username, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, 'patient', ?)
+        INSERT INTO users (full_name, mobile_number, gender, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, 'patient', ?)
         """,
         (
             cleaned_name,
             normalized_mobile,
+            normalized_gender,
             patient_identifier,
             generate_password_hash(password),
             utc_now(),
@@ -426,7 +521,12 @@ def delete_patient_record(patient_id: int) -> dict | None:
     return patient
 
 
-def save_report(patient_id: int, source_filename: str, report_data: dict):
+def save_report(
+    patient_id: int,
+    source_filename: str,
+    report_data: dict,
+    consented_for_training: bool = False,
+):
     db = get_db()
     cursor = db.execute(
         """
@@ -447,9 +547,11 @@ def save_report(patient_id: int, source_filename: str, report_data: dict):
             quality_status,
             needs_retake,
             quality_flags_json,
+            consented_for_training,
+            clinician_confirmed_label,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             patient_id,
@@ -468,6 +570,8 @@ def save_report(patient_id: int, source_filename: str, report_data: dict):
             report_data["quality_status"],
             int(report_data["needs_retake"]),
             json.dumps(report_data["quality_flags"]),
+            int(bool(consented_for_training)),
+            "unconfirmed",
             utc_now(),
         ),
     )
@@ -529,40 +633,40 @@ def login_required(role: str | None = None):
 
 
 def infer_prediction(feature_frame):
-    if prediction_pipeline is not None:
-        model_frame = feature_frame[selected_model_features]
-        probabilities = prediction_pipeline.predict_proba(model_frame)[0]
-        prediction = int(float(probabilities[1]) >= prediction_threshold)
-        return prediction, probabilities
-
-    scaled_vector = legacy_scaler.transform(feature_frame)
-    if legacy_rfe_selector is not None:
-        scaled_vector = legacy_rfe_selector.transform(scaled_vector)
-    prediction = int(legacy_model.predict(scaled_vector)[0])
-    probabilities = legacy_model.predict_proba(scaled_vector)[0]
+    model_frame = feature_frame[selected_model_features]
+    probabilities = prediction_pipeline.predict_proba(model_frame)[0]
+    prediction = int(float(probabilities[1]) >= prediction_threshold)
     return prediction, probabilities
 
 
-def run_prediction(audio_path: str) -> dict:
-    features_dict = extract_features(audio_path)
-    feature_frame = pd.DataFrame(
-        [{name: features_dict[name] for name in ALL_FEATURES}],
-        columns=ALL_FEATURES,
-    )
-    prediction, probabilities = infer_prediction(feature_frame)
+def run_prediction(audio_path: str, gender: str | None = None) -> dict:
+    cleanup_paths = []
+    try:
+        normalized_audio_path, cleanup_paths = normalize_audio_for_analysis(audio_path)
+        extraction_gender = normalize_gender(gender) if uses_gender_specific_extraction else None
+        features_dict = extract_features(normalized_audio_path, gender=extraction_gender)
+        feature_frame = pd.DataFrame(
+            [{name: features_dict[name] for name in ALL_FEATURES}],
+            columns=ALL_FEATURES,
+        )
+        prediction, probabilities = infer_prediction(feature_frame)
 
-    healthy_probability = float(probabilities[0])
-    parkinsons_probability = float(probabilities[1])
-    return {
-        "prediction": prediction,
-        "label": "Parkinson's Detected" if prediction == 1 else "Healthy",
-        "probabilities": {
-            "healthy": round(healthy_probability, 4),
-            "parkinsons": round(parkinsons_probability, 4),
-        },
-        "confidence_gap": round(abs(parkinsons_probability - healthy_probability), 4),
-        "features": features_dict,
-    }
+        healthy_probability = float(probabilities[0])
+        parkinsons_probability = float(probabilities[1])
+        return {
+            "prediction": prediction,
+            "label": "Parkinson's Detected" if prediction == 1 else "Healthy",
+            "probabilities": {
+                "healthy": round(healthy_probability, 4),
+                "parkinsons": round(parkinsons_probability, 4),
+            },
+            "confidence_gap": round(abs(parkinsons_probability - healthy_probability), 4),
+            "features": features_dict,
+        }
+    finally:
+        for path in cleanup_paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 def split_audio_segments(audio_path: str):
@@ -679,15 +783,20 @@ def assess_report_quality(
     }
 
 
-def analyze_voice_sample(audio_path: str) -> dict:
-    segment_paths, cleanup_paths = split_audio_segments(audio_path)
+def analyze_voice_sample(audio_path: str, gender: str | None = None) -> dict:
+    cleanup_paths = []
     segment_results = []
     skipped_segments = []
 
     try:
+        normalized_audio_path, normalization_cleanup_paths = normalize_audio_for_analysis(audio_path)
+        cleanup_paths.extend(normalization_cleanup_paths)
+        segment_paths, segment_cleanup_paths = split_audio_segments(normalized_audio_path)
+        cleanup_paths.extend(segment_cleanup_paths)
+
         for index, segment_path in enumerate(segment_paths, start=1):
             try:
-                segment_result = run_prediction(segment_path)
+                segment_result = run_prediction(segment_path, gender=gender)
                 segment_result["segment_index"] = index
                 segment_results.append(segment_result)
             except ValueError as exc:
@@ -698,13 +807,15 @@ def analyze_voice_sample(audio_path: str) -> dict:
                 raise ValueError(skipped_segments[0]["reason"])
             raise ValueError("The uploaded audio could not be analyzed.")
 
-        healthy_probability = float(
-            np.mean([item["probabilities"]["healthy"] for item in segment_results])
-        )
+        weights = [max(item.get("confidence_gap", 0.01), 0.01) for item in segment_results]
         parkinsons_probability = float(
-            np.mean([item["probabilities"]["parkinsons"] for item in segment_results])
+            np.average(
+                [item["probabilities"]["parkinsons"] for item in segment_results],
+                weights=weights,
+            )
         )
-        prediction = int(parkinsons_probability >= healthy_probability)
+        healthy_probability = float(1.0 - parkinsons_probability)
+        prediction = int(parkinsons_probability >= prediction_threshold)
         stability = float(
             np.mean([item["prediction"] == prediction for item in segment_results])
         )
@@ -856,6 +967,7 @@ def patient_dashboard():
 def doctor_create_patient():
     full_name = request.form.get("full_name", "").strip()
     mobile_number = request.form.get("mobile_number", "").strip()
+    gender = normalize_gender(request.form.get("gender"))
     password = request.form.get("password", "")
     confirm_password = request.form.get("confirm_password", "")
 
@@ -868,7 +980,7 @@ def doctor_create_patient():
         return redirect(url_for("doctor_dashboard"))
 
     try:
-        patient = create_patient_record(full_name, mobile_number, password)
+        patient = create_patient_record(full_name, mobile_number, password, gender=gender)
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(url_for("doctor_dashboard"))
@@ -941,6 +1053,11 @@ def doctor_create_patient_report(patient_id: int):
     audio_file = request.files["audio"]
     if audio_file.filename == "":
         return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    consented_for_training = request.form.get("consent_training") == "1"
 
     filename = secure_filename(audio_file.filename) or "voice_sample.wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(filename)) as temp:
@@ -948,8 +1065,13 @@ def doctor_create_patient_report(patient_id: int):
         temp_path = temp.name
 
     try:
-        report_data = analyze_voice_sample(temp_path)
-        saved_report = save_report(patient_id, filename, report_data)
+        report_data = analyze_voice_sample(temp_path, gender=patient.get("gender"))
+        saved_report = save_report(
+            patient_id,
+            filename,
+            report_data,
+            consented_for_training=consented_for_training,
+        )
         return jsonify(
             {
                 "message": "Report generated and saved successfully.",
@@ -975,6 +1097,11 @@ def create_report():
     audio_file = request.files["audio"]
     if audio_file.filename == "":
         return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    consented_for_training = request.form.get("consent_training") == "1"
 
     filename = secure_filename(audio_file.filename) or "voice_sample.wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(filename)) as temp:
@@ -982,8 +1109,13 @@ def create_report():
         temp_path = temp.name
 
     try:
-        report_data = analyze_voice_sample(temp_path)
-        saved_report = save_report(g.user["id"], filename, report_data)
+        report_data = analyze_voice_sample(temp_path, gender=g.user.get("gender"))
+        saved_report = save_report(
+            g.user["id"],
+            filename,
+            report_data,
+            consented_for_training=consented_for_training,
+        )
         return jsonify(
             {
                 "message": "Report generated and saved successfully.",
@@ -1000,18 +1132,79 @@ def create_report():
             os.unlink(temp_path)
 
 
+@app.route("/api/reports/<int:report_id>/confirm", methods=["PATCH"])
+@login_required(role="doctor")
+def confirm_report(report_id: int):
+    report = get_report_by_id(report_id)
+    if report is None:
+        return jsonify({"error": "Report was not found."}), 404
+
+    payload = request.get_json(silent=True) or request.form
+    clinician_label = normalize_clinician_label(payload.get("clinician_confirmed_label"))
+    if not clinician_label:
+        return jsonify({"error": "Invalid clinician confirmation label."}), 400
+
+    db = get_db()
+    db.execute(
+        "UPDATE reports SET clinician_confirmed_label = ? WHERE id = ?",
+        (clinician_label, report_id),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "message": "Clinician confirmation updated successfully.",
+            "report": get_report_by_id(report_id),
+        }
+    )
+
+
+@app.route("/api/export-training-data", methods=["GET"])
+@login_required(role="doctor")
+def export_training_data():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT features_json, clinician_confirmed_label
+        FROM reports
+        WHERE consented_for_training = 1
+          AND clinician_confirmed_label IN ('confirmed_pd', 'confirmed_healthy')
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+
+    records = []
+    for row in rows:
+        label = 1 if row["clinician_confirmed_label"] == "confirmed_pd" else 0
+        records.append(
+            {
+                "features": json.loads(row["features_json"] or "{}"),
+                "label": label,
+            }
+        )
+
+    response = jsonify(records)
+    response.headers["X-Record-Count"] = str(len(records))
+    return response
+
+
 @app.route("/stream-chunk", methods=["POST"])
 def stream_chunk():
     if "audio" not in request.files:
         return jsonify({"error": "No audio chunk supplied.", "skip": True}), 200
 
     audio_file = request.files["audio"]
+    if audio_file.filename == "":
+        return jsonify({"error": "No audio chunk supplied.", "skip": True}), 200
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "skip": True}), 200
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(audio_file.filename)) as temp:
         audio_file.save(temp.name)
         temp_path = temp.name
 
     try:
-        result = run_prediction(temp_path)
+        result = run_prediction(temp_path, gender=normalize_gender(request.form.get("gender")))
         return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc), "skip": True}), 200
@@ -1029,12 +1222,21 @@ def analyze_voice():
         return jsonify({"error": "No audio file uploaded."}), 400
 
     audio_file = request.files["audio"]
+    if audio_file.filename == "":
+        return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(audio_file.filename)) as temp:
         audio_file.save(temp.name)
         temp_path = temp.name
 
     try:
-        result = analyze_voice_sample(temp_path)
+        result = analyze_voice_sample(
+            temp_path,
+            gender=normalize_gender(request.form.get("gender")),
+        )
         return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400

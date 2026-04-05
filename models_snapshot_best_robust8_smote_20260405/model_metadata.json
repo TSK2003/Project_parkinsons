@@ -1,0 +1,174 @@
+{
+  "training_mode": "subject_grouped_subset_threshold_tuning_with_smote",
+  "scoring_metric": "balanced_accuracy_with_pd_recall_floor",
+  "sklearn_version": "1.4.2",
+  "dataset_path_used": "data\\parkinsons_merged_aligned.data",
+  "outer_splits": 4,
+  "inner_splits": 4,
+  "decision_threshold": 0.55,
+  "target_pd_recall": 0.8,
+  "target_balanced_accuracy": 0.88,
+  "dataset_selector": "aligned",
+  "source_filter": "all",
+  "resampler": "smote",
+  "candidate_selection_mode": "fixed_candidate",
+  "fixed_candidate": "robust_8_extra_trees",
+  "uses_gender_specific_extraction": false,
+  "optional_dependencies": {
+    "xgboost_available": true
+  },
+  "best_candidate": "robust_8_extra_trees",
+  "feature_set_name": "robust_8",
+  "best_classifier": "ExtraTreesClassifier",
+  "selected_features": [
+    "MDVP:Jitter(Abs)",
+    "MDVP:APQ",
+    "HNR",
+    "RPDE",
+    "DFA",
+    "spread1",
+    "spread2",
+    "PPE"
+  ],
+  "artifact_paths": {
+    "prediction_pipeline": "models\\prediction_pipeline.pkl",
+    "selected_features": "models\\selected_features.pkl",
+    "model_metadata": "models\\model_metadata.json"
+  },
+  "subject_level_oof_metrics": {
+    "balanced_accuracy": 0.6919,
+    "pd_recall_sensitivity": 0.8163,
+    "healthy_recall_specificity": 0.5676,
+    "f1_score": 0.7619,
+    "roc_auc": 0.7319,
+    "average_precision": 0.7458
+  },
+  "final_candidate_inner_metrics": {
+    "balanced_accuracy": 0.719,
+    "pd_recall_sensitivity": 0.8163,
+    "healthy_recall_specificity": 0.6216,
+    "f1_score": 0.7767,
+    "roc_auc": 0.7319,
+    "average_precision": 0.7458
+  },
+  "evaluation_artifacts": {
+    "recording_level_oof_predictions": "models\\evaluation\\recording_level_oof_predictions.csv",
+    "subject_level_oof_predictions": "models\\evaluation\\subject_level_oof_predictions.csv",
+    "subject_confusion_matrix_json": "models\\evaluation\\subject_confusion_matrix.json",
+    "subject_confusion_matrix_svg": "models\\evaluation\\subject_confusion_matrix.svg",
+    "roc_curve_csv": "models\\evaluation\\roc_curve.csv",
+    "roc_curve_svg": "models\\evaluation\\roc_curve.svg",
+    "precision_recall_curve_csv": "models\\evaluation\\precision_recall_curve.csv",
+    "precision_recall_curve_svg": "models\\evaluation\\precision_recall_curve.svg"
+  },
+  "fold_summaries": [
+    {
+      "fold": 1,
+      "best_candidate": "robust_8_extra_trees",
+      "feature_set": "robust_8",
+      "model_name": "ExtraTreesClassifier",
+      "threshold": 0.5,
+      "inner_subject_metrics": {
+        "balanced_accuracy": 0.6892,
+        "pd_recall_sensitivity": 0.8611,
+        "healthy_recall_specificity": 0.5172,
+        "f1_score": 0.7654,
+        "roc_auc": 0.6753,
+        "average_precision": 0.6965
+      },
+      "outer_subject_metrics": {
+        "balanced_accuracy": 0.75,
+        "pd_recall_sensitivity": 1.0,
+        "healthy_recall_specificity": 0.5,
+        "f1_score": 0.8667,
+        "roc_auc": 0.7692,
+        "average_precision": 0.7802
+      }
+    },
+    {
+      "fold": 2,
+      "best_candidate": "robust_8_extra_trees",
+      "feature_set": "robust_8",
+      "model_name": "ExtraTreesClassifier",
+      "threshold": 0.475,
+      "inner_subject_metrics": {
+        "balanced_accuracy": 0.6301,
+        "pd_recall_sensitivity": 0.8158,
+        "healthy_recall_specificity": 0.4444,
+        "f1_score": 0.7381,
+        "roc_auc": 0.691,
+        "average_precision": 0.7302
+      },
+      "outer_subject_metrics": {
+        "balanced_accuracy": 0.8545,
+        "pd_recall_sensitivity": 0.9091,
+        "healthy_recall_specificity": 0.8,
+        "f1_score": 0.8696,
+        "roc_auc": 0.8273,
+        "average_precision": 0.8109
+      }
+    },
+    {
+      "fold": 3,
+      "best_candidate": "robust_8_extra_trees",
+      "feature_set": "robust_8",
+      "model_name": "ExtraTreesClassifier",
+      "threshold": 0.625,
+      "inner_subject_metrics": {
+        "balanced_accuracy": 0.7419,
+        "pd_recall_sensitivity": 0.8286,
+        "healthy_recall_specificity": 0.6552,
+        "f1_score": 0.7838,
+        "roc_auc": 0.7754,
+        "average_precision": 0.7686
+      },
+      "outer_subject_metrics": {
+        "balanced_accuracy": 0.5357,
+        "pd_recall_sensitivity": 0.5714,
+        "healthy_recall_specificity": 0.5,
+        "f1_score": 0.6154,
+        "roc_auc": 0.6161,
+        "average_precision": 0.779
+      }
+    },
+    {
+      "fold": 4,
+      "best_candidate": "robust_8_extra_trees",
+      "feature_set": "robust_8",
+      "model_name": "ExtraTreesClassifier",
+      "threshold": 0.45,
+      "inner_subject_metrics": {
+        "balanced_accuracy": 0.7298,
+        "pd_recall_sensitivity": 0.9211,
+        "healthy_recall_specificity": 0.5385,
+        "f1_score": 0.8235,
+        "roc_auc": 0.751,
+        "average_precision": 0.7697
+      },
+      "outer_subject_metrics": {
+        "balanced_accuracy": 0.6364,
+        "pd_recall_sensitivity": 0.8182,
+        "healthy_recall_specificity": 0.4545,
+        "f1_score": 0.6923,
+        "roc_auc": 0.7769,
+        "average_precision": 0.7418
+      }
+    }
+  ],
+  "final_candidate_results": [
+    {
+      "candidate_name": "robust_8_extra_trees",
+      "feature_set": "robust_8",
+      "model_name": "ExtraTreesClassifier",
+      "threshold": 0.55,
+      "inner_subject_metrics": {
+        "balanced_accuracy": 0.719,
+        "pd_recall_sensitivity": 0.8163,
+        "healthy_recall_specificity": 0.6216,
+        "f1_score": 0.7767,
+        "roc_auc": 0.7319,
+        "average_precision": 0.7458
+      }
+    }
+  ]
+}

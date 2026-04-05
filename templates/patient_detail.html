@@ -8,7 +8,7 @@
       <span class="eyebrow">Patient detail</span>
       <h1>{{ patient.full_name }}</h1>
       <p class="muted">
-        Patient ID: <code>{{ patient.username }}</code>. Mobile: {{ patient.mobile_number or "-" }}. Joined {{ patient.created_at|dt }}.
+        Patient ID: <code>{{ patient.username }}</code>. Mobile: {{ patient.mobile_number or "-" }}. Gender: {{ (patient.gender or 'unspecified')|replace('_', ' ')|title }}. Joined {{ patient.created_at|dt }}.
       </p>
     </div>
     <div class="hero-note">
@@ -26,8 +26,8 @@
         <div class="form-grid single-mobile">
           <label class="field">
             <span>Upload audio file</span>
-            <input id="audioFile" type="file" accept=".wav,audio/wav,audio/x-wav">
-            <small>Upload a WAV file for the most reliable analysis. Browser recordings are automatically exported as WAV.</small>
+            <input id="audioFile" name="audio" type="file" accept=".wav,.mp3,.m4a,.aac,.ogg,.flac,.mp4,.webm,audio/*">
+            <small>WAV is preferred, but MP3, M4A, AAC, OGG, FLAC, MP4, and WebM are also accepted and converted on the server when needed.</small>
           </label>
 
           <div class="recorder-box">
@@ -42,6 +42,11 @@
             <small>Ask the patient to sustain "Ahh" for 8 to 10 seconds in a quiet room. The waveform should move while they are speaking, and the recorder auto-stops after 10 seconds.</small>
           </div>
         </div>
+
+        <label class="checkbox-field">
+          <input type="checkbox" name="consent_training" value="1">
+          <span>Patient consents to this recording being used to improve the AI model (anonymised)</span>
+        </label>
 
         <div id="analysisStatus" class="inline-status">
           No audio uploaded yet. Choose a file or record a sample to create a new patient report.
@@ -63,6 +68,10 @@
         <div class="metric-tile">
           <span>Mobile number</span>
           <strong>{{ patient.mobile_number or "-" }}</strong>
+        </div>
+        <div class="metric-tile">
+          <span>Gender</span>
+          <strong>{{ (patient.gender or 'unspecified')|replace('_', ' ')|title }}</strong>
         </div>
         <div class="metric-tile">
           <span>Saved reports</span>
@@ -93,6 +102,7 @@
 
     {% if reports %}
       <div class="report-stack">
+        {% set show_confirmation_controls = true %}
         {% for report in reports %}
           {% include "_report_card.html" %}
         {% endfor %}

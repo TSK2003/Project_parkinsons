@@ -1,10 +1,20 @@
-pandas
-numpy
-scikit-learn
-imbalanced-learn
-flask
-flask-cors
-joblib
-praat-parselmouth
-nolds
-scipy
+# Core data processing and numerical computing
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.12.0
+
+# Machine learning, model selection, and class balancing
+scikit-learn==1.4.2
+imbalanced-learn==0.12.2
+joblib==1.4.2
+xgboost==2.1.1
+shap==0.46.0
+
+# Web application framework and CORS support
+flask==3.0.3
+flask-cors==4.0.1
+
+# Audio analysis, feature extraction, and nonlinear dynamics
+praat-parselmouth==0.4.4
+nolds==0.6.1
+librosa==0.10.2.post1

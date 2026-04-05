@@ -1,10 +1,18 @@
+import argparse
 import json
 import os
 
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
+import sklearn
+from imblearn.over_sampling import SMOTE, SVMSMOTE
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+    VotingClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
@@ -19,26 +27,59 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+try:
+    from xgboost import XGBClassifier
+except ImportError:
+    XGBClassifier = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
+DEFAULT_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
+MERGED_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons_merged.data")
+ALIGNED_MERGED_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons_merged_aligned.data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 EVAL_DIR = os.path.join(MODELS_DIR, "evaluation")
 
 RANDOM_STATE = 42
 OUTER_SPLITS = 4
 INNER_SPLITS = 4
-TARGET_PD_RECALL = 0.85
-TARGET_BALANCED_ACCURACY = 0.75
+TARGET_PD_RECALL = 0.80
+TARGET_BALANCED_ACCURACY = 0.88
 THRESHOLD_GRID = np.round(np.linspace(0.25, 0.85, 25), 3)
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(EVAL_DIR, exist_ok=True)
 
 
+ALL_DATASET_FEATURES = [
+    "MDVP:Fo(Hz)",
+    "MDVP:Fhi(Hz)",
+    "MDVP:Flo(Hz)",
+    "MDVP:Jitter(%)",
+    "MDVP:Jitter(Abs)",
+    "MDVP:RAP",
+    "MDVP:PPQ",
+    "Jitter:DDP",
+    "MDVP:Shimmer",
+    "MDVP:Shimmer(dB)",
+    "Shimmer:APQ3",
+    "Shimmer:APQ5",
+    "MDVP:APQ",
+    "Shimmer:DDA",
+    "NHR",
+    "HNR",
+    "RPDE",
+    "DFA",
+    "spread1",
+    "spread2",
+    "D2",
+    "PPE",
+]
+
 FEATURE_SUBSETS = {
     "paper_4": ["HNR", "RPDE", "DFA", "PPE"],
-    "paper_6": [
+    "paper_7": [
         "MDVP:Jitter(Abs)",
         "Jitter:DDP",
         "MDVP:APQ",
@@ -46,6 +87,23 @@ FEATURE_SUBSETS = {
         "RPDE",
         "DFA",
         "PPE",
+    ],
+    "paper_15": [
+        "PPE",
+        "MDVP:Fo(Hz)",
+        "Shimmer:APQ3",
+        "D2",
+        "MDVP:Jitter(Abs)",
+        "MDVP:APQ",
+        "MDVP:Fhi(Hz)",
+        "MDVP:RAP",
+        "Shimmer:APQ5",
+        "MDVP:Jitter(%)",
+        "MDVP:Shimmer",
+        "spread2",
+        "DFA",
+        "NHR",
+        "spread1",
     ],
     "nonlinear_5": ["HNR", "RPDE", "DFA", "D2", "PPE"],
     "robust_8": [
@@ -58,53 +116,110 @@ FEATURE_SUBSETS = {
         "spread2",
         "PPE",
     ],
+    "full_22": ALL_DATASET_FEATURES,
 }
+
+DATASET_CHOICES = ("default", "uci", "merged", "aligned")
+SOURCE_FILTER_CHOICES = ("all", "uci", "figshare")
+RESAMPLER_CHOICES = ("smote", "svmsmote", "none")
+
+
+def build_pipeline(classifier) -> Pipeline:
+    return Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            ("classifier", classifier),
+        ]
+    )
 
 
 def build_candidate_configs() -> list[dict]:
-    return [
+    def build_soft_voting_ensemble() -> VotingClassifier:
+        return VotingClassifier(
+            estimators=[
+                (
+                    "et",
+                    ExtraTreesClassifier(
+                        n_estimators=200,
+                        class_weight="balanced",
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1,
+                    ),
+                ),
+                (
+                    "gb",
+                    GradientBoostingClassifier(
+                        n_estimators=100,
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+                (
+                    "svm",
+                    SVC(
+                        kernel="rbf",
+                        probability=True,
+                        class_weight="balanced",
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+            ],
+            voting="soft",
+        )
+
+    candidates = [
         {
             "name": "nonlinear_5_extra_trees",
             "feature_set": "nonlinear_5",
             "features": FEATURE_SUBSETS["nonlinear_5"],
             "model_name": "ExtraTreesClassifier",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        ExtraTreesClassifier(
-                            n_estimators=250,
-                            max_depth=None,
-                            min_samples_split=2,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                            n_jobs=-1,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=250,
+                    max_depth=None,
+                    min_samples_split=2,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
             ),
+        },
+        {
+            "name": "nonlinear_5_svm",
+            "feature_set": "nonlinear_5",
+            "features": FEATURE_SUBSETS["nonlinear_5"],
+            "model_name": "SVC",
+            "build_estimator": lambda: build_pipeline(
+                SVC(
+                    kernel="rbf",
+                    probability=True,
+                    class_weight="balanced",
+                    C=10,
+                    gamma="scale",
+                    random_state=RANDOM_STATE,
+                )
+            ),
+        },
+        {
+            "name": "nonlinear_5_ensemble",
+            "feature_set": "nonlinear_5",
+            "features": FEATURE_SUBSETS["nonlinear_5"],
+            "model_name": "VotingClassifier",
+            "build_estimator": lambda: build_pipeline(build_soft_voting_ensemble()),
         },
         {
             "name": "paper_4_extra_trees",
             "feature_set": "paper_4",
             "features": FEATURE_SUBSETS["paper_4"],
             "model_name": "ExtraTreesClassifier",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        ExtraTreesClassifier(
-                            n_estimators=250,
-                            max_depth=None,
-                            min_samples_split=2,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                            n_jobs=-1,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=250,
+                    max_depth=None,
+                    min_samples_split=2,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
             ),
         },
         {
@@ -112,49 +227,221 @@ def build_candidate_configs() -> list[dict]:
             "feature_set": "paper_4",
             "features": FEATURE_SUBSETS["paper_4"],
             "model_name": "LogisticRegression",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        LogisticRegression(
-                            max_iter=5000,
-                            C=1.0,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                LogisticRegression(
+                    max_iter=5000,
+                    C=1.0,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                )
             ),
         },
         {
-            "name": "paper_6_random_forest",
-            "feature_set": "paper_6",
-            "features": FEATURE_SUBSETS["paper_6"],
+            "name": "paper_7_random_forest",
+            "feature_set": "paper_7",
+            "features": FEATURE_SUBSETS["paper_7"],
             "model_name": "RandomForestClassifier",
-            "build_estimator": lambda: Pipeline(
-                steps=[
-                    ("scaler", StandardScaler()),
-                    (
-                        "classifier",
-                        RandomForestClassifier(
-                            n_estimators=250,
-                            max_depth=None,
-                            min_samples_split=2,
-                            class_weight="balanced",
-                            random_state=RANDOM_STATE,
-                            n_jobs=-1,
-                        ),
-                    ),
-                ]
+            "build_estimator": lambda: build_pipeline(
+                RandomForestClassifier(
+                    n_estimators=250,
+                    max_depth=None,
+                    min_samples_split=2,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
+            ),
+        },
+        {
+            "name": "paper_15_extra_trees",
+            "feature_set": "paper_15",
+            "features": FEATURE_SUBSETS["paper_15"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
+            ),
+        },
+        {
+            "name": "robust_8_extra_trees",
+            "feature_set": "robust_8",
+            "features": FEATURE_SUBSETS["robust_8"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
+            ),
+        },
+        {
+            "name": "robust_8_gradient_boost",
+            "feature_set": "robust_8",
+            "features": FEATURE_SUBSETS["robust_8"],
+            "model_name": "GradientBoostingClassifier",
+            "build_estimator": lambda: build_pipeline(
+                GradientBoostingClassifier(
+                    n_estimators=200,
+                    learning_rate=0.05,
+                    random_state=RANDOM_STATE,
+                )
+            ),
+        },
+        {
+            "name": "full_22_gradient_boost",
+            "feature_set": "full_22",
+            "features": FEATURE_SUBSETS["full_22"],
+            "model_name": "GradientBoostingClassifier",
+            "build_estimator": lambda: build_pipeline(
+                GradientBoostingClassifier(
+                    n_estimators=200,
+                    learning_rate=0.05,
+                    random_state=RANDOM_STATE,
+                )
+            ),
+        },
+        {
+            "name": "full_22_extra_trees",
+            "feature_set": "full_22",
+            "features": FEATURE_SUBSETS["full_22"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
             ),
         },
     ]
 
+    if XGBClassifier is not None:
+        candidates.append(
+            {
+                "name": "paper_15_xgboost",
+                "feature_set": "paper_15",
+                "features": FEATURE_SUBSETS["paper_15"],
+                "model_name": "XGBClassifier",
+                "build_estimator": lambda: build_pipeline(
+                    XGBClassifier(
+                        n_estimators=250,
+                        max_depth=4,
+                        learning_rate=0.05,
+                        subsample=0.9,
+                        colsample_bytree=0.9,
+                        reg_lambda=1.0,
+                        objective="binary:logistic",
+                        eval_metric="logloss",
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1,
+                    )
+                ),
+            }
+        )
+
+    return candidates
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train and evaluate the Parkinson's screening model."
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=DATASET_CHOICES,
+        default="default",
+        help=(
+            "Dataset to use: default prefers aligned merged, then merged, then UCI; "
+            "uci uses only the original UCI data; merged uses raw merged data; "
+            "aligned uses the aligned merged data."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-candidate",
+        default=None,
+        help=(
+            "Optional candidate name to lock evaluation and final training to a single "
+            "model configuration, for example robust_8_extra_trees."
+        ),
+    )
+    parser.add_argument(
+        "--source-filter",
+        choices=SOURCE_FILTER_CHOICES,
+        default="all",
+        help=(
+            "Optional row filter based on record source. "
+            "Use 'figshare' for WAV-derived rows only, 'uci' for original UCI rows only, "
+            "or 'all' to keep every row in the selected dataset."
+        ),
+    )
+    parser.add_argument(
+        "--resampler",
+        choices=RESAMPLER_CHOICES,
+        default="smote",
+        help=(
+            "Class-balancing strategy inside each training fold. "
+            "Use 'svmsmote' to mirror the paper more closely, 'smote' for the current baseline, "
+            "or 'none' to disable synthetic oversampling."
+        ),
+    )
+    return parser.parse_args()
+
+
+def resolve_candidate_configs(fixed_candidate_name: str | None) -> list[dict]:
+    if fixed_candidate_name == "paper_15_xgboost" and XGBClassifier is None:
+        raise ValueError(
+            "Candidate 'paper_15_xgboost' requires the optional xgboost package. "
+            "Install it with `pip install xgboost` and retry."
+        )
+
+    candidate_configs = build_candidate_configs()
+    if not fixed_candidate_name:
+        return candidate_configs
+
+    filtered = [
+        candidate
+        for candidate in candidate_configs
+        if candidate["name"] == fixed_candidate_name
+    ]
+    if not filtered:
+        available = ", ".join(candidate["name"] for candidate in candidate_configs)
+        raise ValueError(
+            f"Unknown candidate '{fixed_candidate_name}'. Available candidates: {available}"
+        )
+    return filtered
+
+
+def validate_feature_subsets(feature_names: list[str]) -> None:
+    missing_by_subset = {}
+    for subset_name, subset_features in FEATURE_SUBSETS.items():
+        missing = [feature for feature in subset_features if feature not in feature_names]
+        if missing:
+            missing_by_subset[subset_name] = missing
+
+    if missing_by_subset:
+        details = "; ".join(
+            f"{subset}: {', '.join(features)}"
+            for subset, features in missing_by_subset.items()
+        )
+        raise ValueError(f"Configured feature subsets reference missing dataset columns: {details}")
+
 
 def extract_subject_ids(names: pd.Series) -> pd.Series:
-    subject_ids = names.str.extract(r"^(phon_R\d+_S\d+)")[0]
-    return subject_ids.fillna(names)
+    def derive_subject_id(name: str) -> str:
+        stem = os.path.splitext(str(name))[0]
+        parts = stem.split("_")
+        if len(parts) >= 3 and parts[0] == "phon" and parts[1].startswith("R") and parts[2].startswith("S"):
+            return "_".join(parts[:3])
+        return stem
+
+    return names.fillna("").map(derive_subject_id)
 
 
 def aggregate_subject_predictions(prediction_rows: list[dict]) -> pd.DataFrame:
@@ -205,25 +492,19 @@ def candidate_rank(metrics: dict) -> tuple:
     return (
         int(metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL),
         round(metrics["balanced_accuracy"], 6),
-        round(metrics["pd_recall_sensitivity"], 6),
         round(metrics["healthy_recall_specificity"], 6),
+        round(metrics["pd_recall_sensitivity"], 6),
         round(metrics["f1_score"], 6),
     )
 
 
 def threshold_rank(metrics: dict) -> tuple:
-    feasible = (
-        metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL
-        and metrics["balanced_accuracy"] >= TARGET_BALANCED_ACCURACY
-    )
-    recall_feasible = metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL
     return (
-        int(feasible),
-        int(recall_feasible),
+        int(metrics["pd_recall_sensitivity"] >= TARGET_PD_RECALL),
         round(metrics["balanced_accuracy"], 6),
         round(metrics["healthy_recall_specificity"], 6),
-        round(metrics["f1_score"], 6),
         round(metrics["pd_recall_sensitivity"], 6),
+        round(metrics["f1_score"], 6),
     )
 
 
@@ -245,11 +526,67 @@ def tune_threshold(subject_probabilities: pd.DataFrame) -> dict:
     return best
 
 
+def resample_training_data(
+    train_subset: pd.DataFrame,
+    y_train: pd.Series,
+    resampler_name: str,
+):
+    if resampler_name == "none":
+        return train_subset, y_train
+
+    class_counts = y_train.value_counts()
+    if len(class_counts) < 2:
+        return train_subset, y_train
+
+    minority_count = int(class_counts.min())
+    if minority_count <= 1:
+        return train_subset, y_train
+
+    k_neighbors = max(1, min(5, minority_count - 1))
+
+    if resampler_name == "smote":
+        sampler = SMOTE(random_state=RANDOM_STATE, k_neighbors=k_neighbors)
+        return sampler.fit_resample(train_subset, y_train)
+
+    if resampler_name == "svmsmote":
+        m_neighbors = max(1, min(10, minority_count - 1))
+        try:
+            sampler = SVMSMOTE(
+                random_state=RANDOM_STATE,
+                k_neighbors=k_neighbors,
+                m_neighbors=m_neighbors,
+            )
+            return sampler.fit_resample(train_subset, y_train)
+        except ValueError:
+            fallback = SMOTE(random_state=RANDOM_STATE, k_neighbors=k_neighbors)
+            return fallback.fit_resample(train_subset, y_train)
+
+    raise ValueError(f"Unsupported resampler: {resampler_name}")
+
+
+def fit_estimator_with_resampling(
+    candidate: dict,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    resampler_name: str,
+):
+    estimator = candidate["build_estimator"]()
+    train_subset = X_train[candidate["features"]]
+    X_train_res, y_train_res = resample_training_data(
+        train_subset,
+        y_train,
+        resampler_name,
+    )
+    estimator.fit(X_train_res, y_train_res)
+    return estimator
+
+
 def evaluate_candidate_with_inner_cv(
     candidate: dict,
     X_train: pd.DataFrame,
     y_train: pd.Series,
     groups_train: pd.Series,
+    resampler_name: str,
 ) -> dict:
     inner_cv = StratifiedGroupKFold(
         n_splits=INNER_SPLITS,
@@ -262,18 +599,24 @@ def evaluate_candidate_with_inner_cv(
         inner_cv.split(X_train, y_train, groups=groups_train),
         start=1,
     ):
-        estimator = candidate["build_estimator"]()
-        estimator.fit(
-            X_train.iloc[inner_train_index][candidate["features"]],
-            y_train.iloc[inner_train_index],
+        inner_X_train = X_train.iloc[inner_train_index]
+        inner_y_train = y_train.iloc[inner_train_index]
+        inner_X_valid = X_train.iloc[inner_valid_index]
+        inner_y_valid = y_train.iloc[inner_valid_index]
+
+        estimator = fit_estimator_with_resampling(
+            candidate,
+            inner_X_train,
+            inner_y_train,
+            resampler_name,
         )
         probabilities = estimator.predict_proba(
-            X_train.iloc[inner_valid_index][candidate["features"]]
+            inner_X_valid[candidate["features"]]
         )[:, 1]
 
         for subject_id, y_true, pd_probability in zip(
             groups_train.iloc[inner_valid_index],
-            y_train.iloc[inner_valid_index],
+            inner_y_valid,
             probabilities,
         ):
             rows.append(
@@ -478,13 +821,50 @@ def print_metric_block(title: str, metrics: dict) -> None:
     )
 
 
+def relative_path(path: str) -> str:
+    return os.path.relpath(path, BASE_DIR)
+
+
+def resolve_dataset_path(dataset_choice: str) -> str:
+    if dataset_choice == "uci":
+        return DEFAULT_DATA_PATH
+    if dataset_choice == "merged":
+        return MERGED_DATA_PATH
+    if dataset_choice == "aligned":
+        return ALIGNED_MERGED_DATA_PATH
+    if os.path.exists(ALIGNED_MERGED_DATA_PATH):
+        return ALIGNED_MERGED_DATA_PATH
+    if os.path.exists(MERGED_DATA_PATH):
+        return MERGED_DATA_PATH
+    return DEFAULT_DATA_PATH
+
+
+def apply_source_filter(df: pd.DataFrame, source_filter: str) -> pd.DataFrame:
+    if source_filter == "all":
+        return df.copy()
+
+    is_figshare = df["name"].astype(str).str.startswith("figshare_")
+    if source_filter == "figshare":
+        return df.loc[is_figshare].copy()
+    if source_filter == "uci":
+        return df.loc[~is_figshare].copy()
+
+    raise ValueError(f"Unsupported source filter: {source_filter}")
+
+
 def main() -> None:
+    args = parse_args()
     print("=" * 72)
     print("Parkinson's Disease Training Pipeline - Subset + Threshold Tuning")
     print("=" * 72)
 
     print("\n[1/7] Loading dataset and deriving subject groups...")
-    df = pd.read_csv(DATA_PATH)
+    dataset_path = resolve_dataset_path(args.dataset)
+    print(f"Using dataset          : {dataset_path}")
+    print(f"Dataset selector       : {args.dataset}")
+    df = pd.read_csv(dataset_path)
+    df = apply_source_filter(df, args.source_filter)
+    print(f"Source filter          : {args.source_filter}")
     df["subject_id"] = extract_subject_ids(df["name"])
     subject_status = df.groupby("subject_id")["status"].first()
 
@@ -493,13 +873,23 @@ def main() -> None:
     print(f"Subject count          : {subject_status.shape[0]}")
     print(f"Healthy subjects       : {int((subject_status == 0).sum())}")
     print(f"Parkinson's subjects   : {int((subject_status == 1).sum())}")
+    print(f"Resampler              : {args.resampler}")
 
     feature_names = [column for column in df.columns if column not in {"name", "status", "subject_id"}]
+    validate_feature_subsets(feature_names)
     X = df[feature_names]
     y = df["status"]
     groups = df["subject_id"]
 
-    candidate_configs = build_candidate_configs()
+    candidate_configs = resolve_candidate_configs(args.fixed_candidate)
+    print(
+        "Candidate selection    : "
+        + (
+            args.fixed_candidate
+            if args.fixed_candidate
+            else "auto search across configured candidates"
+        )
+    )
 
     print("\n[2/7] Running nested grouped validation with threshold tuning...")
     outer_cv = StratifiedGroupKFold(
@@ -525,15 +915,25 @@ def main() -> None:
 
         candidate_results = []
         for candidate in candidate_configs:
-            result = evaluate_candidate_with_inner_cv(candidate, X_train, y_train, groups_train)
+            result = evaluate_candidate_with_inner_cv(
+                candidate,
+                X_train,
+                y_train,
+                groups_train,
+                args.resampler,
+            )
             candidate_results.append(result)
 
         best_candidate = max(candidate_results, key=lambda item: candidate_rank(item["inner_subject_metrics"]))
         estimator_template = next(
             candidate for candidate in candidate_configs if candidate["name"] == best_candidate["candidate_name"]
         )
-        final_fold_estimator = estimator_template["build_estimator"]()
-        final_fold_estimator.fit(X_train[best_candidate["features"]], y_train)
+        final_fold_estimator = fit_estimator_with_resampling(
+            estimator_template,
+            X_train,
+            y_train,
+            args.resampler,
+        )
         test_probabilities = final_fold_estimator.predict_proba(X_test[best_candidate["features"]])[:, 1]
 
         for recording_name, subject_id, y_true, pd_probability in zip(
@@ -582,23 +982,20 @@ def main() -> None:
             f"  Fold {fold_index}: {best_candidate['candidate_name']} | "
             f"threshold={best_candidate['threshold']:.3f} | "
             f"balanced_accuracy={fold_metrics['balanced_accuracy']:.4f} | "
+            f"healthy_recall={fold_metrics['healthy_recall_specificity']:.4f} | "
             f"pd_recall={fold_metrics['pd_recall_sensitivity']:.4f}"
         )
 
     print("\n[3/7] Aggregating outer-fold predictions at subject level...")
+    recording_eval_path = os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv")
+    subject_eval_path = os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv")
     recording_eval = pd.DataFrame(outer_prediction_rows).sort_values(
         ["fold", "subject_id", "recording_name"]
     )
-    recording_eval.to_csv(
-        os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv"),
-        index=False,
-    )
+    recording_eval.to_csv(recording_eval_path, index=False)
 
     subject_eval = aggregate_subject_predictions(outer_prediction_rows)
-    subject_eval.to_csv(
-        os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv"),
-        index=False,
-    )
+    subject_eval.to_csv(subject_eval_path, index=False)
 
     subject_metrics = compute_subject_metrics(subject_eval)
     print_metric_block("Subject-Level Out-of-Fold Metrics", subject_metrics)
@@ -608,24 +1005,27 @@ def main() -> None:
     subject_y_pred = subject_eval["prediction"].to_numpy()
     subject_y_score = subject_eval["parkinsons_probability"].to_numpy()
 
+    subject_confusion_matrix_stem = os.path.join(EVAL_DIR, "subject_confusion_matrix")
+    roc_curve_csv_path = os.path.join(EVAL_DIR, "roc_curve.csv")
+    precision_recall_curve_csv_path = os.path.join(EVAL_DIR, "precision_recall_curve.csv")
+    roc_curve_svg_path = os.path.join(EVAL_DIR, "roc_curve.svg")
+    precision_recall_curve_svg_path = os.path.join(EVAL_DIR, "precision_recall_curve.svg")
+
     subject_cm = confusion_matrix(subject_y_true, subject_y_pred, labels=[0, 1])
-    write_confusion_matrix_artifacts(
-        os.path.join(EVAL_DIR, "subject_confusion_matrix"),
-        subject_cm,
-    )
+    write_confusion_matrix_artifacts(subject_confusion_matrix_stem, subject_cm)
 
     fpr, tpr, _ = roc_curve(subject_y_true, subject_y_score)
     precision, recall, _ = precision_recall_curve(subject_y_true, subject_y_score)
-    write_curve_csv(os.path.join(EVAL_DIR, "roc_curve.csv"), "fpr", fpr, "tpr", tpr)
+    write_curve_csv(roc_curve_csv_path, "fpr", fpr, "tpr", tpr)
     write_curve_csv(
-        os.path.join(EVAL_DIR, "precision_recall_curve.csv"),
+        precision_recall_curve_csv_path,
         "recall",
         recall,
         "precision",
         precision,
     )
     write_line_chart_svg(
-        os.path.join(EVAL_DIR, "roc_curve.svg"),
+        roc_curve_svg_path,
         x_values=fpr,
         y_values=tpr,
         title="Subject-Level ROC Curve",
@@ -634,7 +1034,7 @@ def main() -> None:
         diagonal_reference=True,
     )
     write_line_chart_svg(
-        os.path.join(EVAL_DIR, "precision_recall_curve.svg"),
+        precision_recall_curve_svg_path,
         x_values=recall,
         y_values=precision,
         title="Subject-Level Precision-Recall Curve",
@@ -647,7 +1047,7 @@ def main() -> None:
     final_candidate_results = []
     for candidate in candidate_configs:
         final_candidate_results.append(
-            evaluate_candidate_with_inner_cv(candidate, X, y, groups)
+            evaluate_candidate_with_inner_cv(candidate, X, y, groups, args.resampler)
         )
 
     final_choice = max(
@@ -657,8 +1057,12 @@ def main() -> None:
     final_config = next(
         candidate for candidate in candidate_configs if candidate["name"] == final_choice["candidate_name"]
     )
-    final_estimator = final_config["build_estimator"]()
-    final_estimator.fit(X[final_choice["features"]], y)
+    final_estimator = fit_estimator_with_resampling(
+        final_config,
+        X,
+        y,
+        args.resampler,
+    )
 
     print(f"Best candidate          : {final_choice['candidate_name']}")
     print(f"Feature set             : {final_choice['feature_set']}")
@@ -669,23 +1073,43 @@ def main() -> None:
         print(f"  - {feature}")
 
     print("\n[6/7] Saving inference artifacts...")
-    joblib.dump(final_estimator, os.path.join(MODELS_DIR, "prediction_pipeline.pkl"))
-    joblib.dump(final_estimator.named_steps["classifier"], os.path.join(MODELS_DIR, "parkinsons_model.pkl"))
-    joblib.dump(final_estimator.named_steps["scaler"], os.path.join(MODELS_DIR, "scaler.pkl"))
-    joblib.dump(final_choice["features"], os.path.join(MODELS_DIR, "selected_features.pkl"))
+    prediction_pipeline_path = os.path.join(MODELS_DIR, "prediction_pipeline.pkl")
+    selected_features_path = os.path.join(MODELS_DIR, "selected_features.pkl")
+    model_metadata_path = os.path.join(MODELS_DIR, "model_metadata.json")
+
+    joblib.dump(final_estimator, prediction_pipeline_path)
+    joblib.dump(final_choice["features"], selected_features_path)
 
     metadata = {
-        "training_mode": "subject_grouped_subset_threshold_tuning",
-        "scoring_metric": "balanced_accuracy_with_pd_recall_target",
+        "training_mode": f"subject_grouped_subset_threshold_tuning_with_{args.resampler}",
+        "scoring_metric": "balanced_accuracy_with_pd_recall_floor",
+        "sklearn_version": sklearn.__version__,
+        "dataset_path_used": relative_path(dataset_path),
         "outer_splits": OUTER_SPLITS,
         "inner_splits": INNER_SPLITS,
         "decision_threshold": round(float(final_choice["threshold"]), 4),
         "target_pd_recall": TARGET_PD_RECALL,
         "target_balanced_accuracy": TARGET_BALANCED_ACCURACY,
+        "dataset_selector": args.dataset,
+        "source_filter": args.source_filter,
+        "resampler": args.resampler,
+        "candidate_selection_mode": (
+            "fixed_candidate" if args.fixed_candidate else "auto_search"
+        ),
+        "fixed_candidate": args.fixed_candidate,
+        "uses_gender_specific_extraction": False,
+        "optional_dependencies": {
+            "xgboost_available": XGBClassifier is not None,
+        },
         "best_candidate": final_choice["candidate_name"],
         "feature_set_name": final_choice["feature_set"],
         "best_classifier": final_choice["model_name"],
         "selected_features": final_choice["features"],
+        "artifact_paths": {
+            "prediction_pipeline": relative_path(prediction_pipeline_path),
+            "selected_features": relative_path(selected_features_path),
+            "model_metadata": relative_path(model_metadata_path),
+        },
         "subject_level_oof_metrics": {
             key: round(value, 4)
             for key, value in subject_metrics.items()
@@ -695,14 +1119,14 @@ def main() -> None:
             for key, value in final_choice["inner_subject_metrics"].items()
         },
         "evaluation_artifacts": {
-            "recording_level_oof_predictions": os.path.join(EVAL_DIR, "recording_level_oof_predictions.csv"),
-            "subject_level_oof_predictions": os.path.join(EVAL_DIR, "subject_level_oof_predictions.csv"),
-            "subject_confusion_matrix_json": os.path.join(EVAL_DIR, "subject_confusion_matrix.json"),
-            "subject_confusion_matrix_svg": os.path.join(EVAL_DIR, "subject_confusion_matrix.svg"),
-            "roc_curve_csv": os.path.join(EVAL_DIR, "roc_curve.csv"),
-            "roc_curve_svg": os.path.join(EVAL_DIR, "roc_curve.svg"),
-            "precision_recall_curve_csv": os.path.join(EVAL_DIR, "precision_recall_curve.csv"),
-            "precision_recall_curve_svg": os.path.join(EVAL_DIR, "precision_recall_curve.svg"),
+            "recording_level_oof_predictions": relative_path(recording_eval_path),
+            "subject_level_oof_predictions": relative_path(subject_eval_path),
+            "subject_confusion_matrix_json": relative_path(f"{subject_confusion_matrix_stem}.json"),
+            "subject_confusion_matrix_svg": relative_path(f"{subject_confusion_matrix_stem}.svg"),
+            "roc_curve_csv": relative_path(roc_curve_csv_path),
+            "roc_curve_svg": relative_path(roc_curve_svg_path),
+            "precision_recall_curve_csv": relative_path(precision_recall_curve_csv_path),
+            "precision_recall_curve_svg": relative_path(precision_recall_curve_svg_path),
         },
         "fold_summaries": fold_summaries,
         "final_candidate_results": [
@@ -720,7 +1144,7 @@ def main() -> None:
         ],
     }
 
-    with open(os.path.join(MODELS_DIR, "model_metadata.json"), "w", encoding="utf-8") as handle:
+    with open(model_metadata_path, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
 
     print("\n[7/7] Saved final model, subset, and tuned threshold.")

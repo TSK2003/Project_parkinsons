@@ -1,0 +1,200 @@
+[
+  {
+    "feature": "MDVP:Fo(Hz)",
+    "applied": true,
+    "source_mean": 154.22864102564102,
+    "source_std": 41.39006474907147,
+    "reference_mean": 169.58615018518518,
+    "reference_std": 49.35067937583148,
+    "mean_shift": 15.35750915954415
+  },
+  {
+    "feature": "MDVP:Fhi(Hz)",
+    "applied": true,
+    "source_mean": 197.10491794871797,
+    "source_std": 91.49154763503036,
+    "reference_mean": 198.27682240740742,
+    "reference_std": 69.05060120589934,
+    "mean_shift": 1.171904458689454
+  },
+  {
+    "feature": "MDVP:Flo(Hz)",
+    "applied": true,
+    "source_mean": 116.32463076923077,
+    "source_std": 43.52141318199365,
+    "reference_mean": 146.96420000000003,
+    "reference_std": 54.856716720934834,
+    "mean_shift": 30.63956923076927
+  },
+  {
+    "feature": "MDVP:Jitter(%)",
+    "applied": true,
+    "source_mean": 0.006220461538461538,
+    "source_std": 0.00484813369260256,
+    "reference_mean": 0.006333518518518518,
+    "reference_std": 0.003432214839895335,
+    "mean_shift": 0.00011305698005697942
+  },
+  {
+    "feature": "MDVP:Jitter(Abs)",
+    "applied": true,
+    "source_mean": 4.395897435897436e-05,
+    "source_std": 3.482190859976326e-05,
+    "reference_mean": 4.3148148148148155e-05,
+    "reference_std": 3.0332999283990096e-05,
+    "mean_shift": -8.108262108262026e-07
+  },
+  {
+    "feature": "MDVP:RAP",
+    "applied": true,
+    "source_mean": 0.003306410256410257,
+    "source_std": 0.0029677744162016884,
+    "reference_mean": 0.003404814814814814,
+    "reference_std": 0.0018703109828599547,
+    "mean_shift": 9.840455840455726e-05
+  },
+  {
+    "feature": "MDVP:PPQ",
+    "applied": true,
+    "source_mean": 0.003446358974358974,
+    "source_std": 0.0027589766469679313,
+    "reference_mean": 0.0036798148148148154,
+    "reference_std": 0.002085719178931163,
+    "mean_shift": 0.00023345584045584124
+  },
+  {
+    "feature": "Jitter:DDP",
+    "applied": true,
+    "source_mean": 0.009919948717948717,
+    "source_std": 0.008903344355858987,
+    "reference_mean": 0.010215185185185185,
+    "reference_std": 0.005611048313159188,
+    "mean_shift": 0.00029523646723646733
+  },
+  {
+    "feature": "MDVP:Shimmer",
+    "applied": true,
+    "source_mean": 0.0297091282051282,
+    "source_std": 0.01885693185894681,
+    "reference_mean": 0.0716537037037037,
+    "reference_std": 0.03181113619510878,
+    "mean_shift": 0.041944575498575505
+  },
+  {
+    "feature": "MDVP:Shimmer(dB)",
+    "applied": true,
+    "source_mean": 0.2822512820512821,
+    "source_std": 0.19487729006053414,
+    "reference_mean": 0.6327340740740742,
+    "reference_std": 0.2726474123037278,
+    "mean_shift": 0.35048279202279214
+  },
+  {
+    "feature": "Shimmer:APQ3",
+    "applied": true,
+    "source_mean": 0.015664153846153845,
+    "source_std": 0.010153161595709018,
+    "reference_mean": 0.03755851851851851,
+    "reference_std": 0.016719123319009713,
+    "mean_shift": 0.021894364672364667
+  },
+  {
+    "feature": "Shimmer:APQ5",
+    "applied": true,
+    "source_mean": 0.017878256410256407,
+    "source_std": 0.012023705538741727,
+    "reference_mean": 0.04621851851851851,
+    "reference_std": 0.021224412733383435,
+    "mean_shift": 0.028340262108262106
+  },
+  {
+    "feature": "MDVP:APQ",
+    "applied": true,
+    "source_mean": 0.02408148717948718,
+    "source_std": 0.016946736247029432,
+    "reference_mean": 0.061253703703703706,
+    "reference_std": 0.02866868736235343,
+    "mean_shift": 0.037172216524216525
+  },
+  {
+    "feature": "Shimmer:DDA",
+    "applied": true,
+    "source_mean": 0.04699261538461539,
+    "source_std": 0.030459119431240397,
+    "reference_mean": 0.11267500000000003,
+    "reference_std": 0.050156863212909256,
+    "mean_shift": 0.06568238461538464
+  },
+  {
+    "feature": "NHR",
+    "applied": true,
+    "source_mean": 0.02484707692307692,
+    "source_std": 0.04041844855606928,
+    "reference_mean": 0.023037407407407413,
+    "reference_std": 0.025976095483114255,
+    "mean_shift": -0.001809669515669507
+  },
+  {
+    "feature": "HNR",
+    "applied": true,
+    "source_mean": 21.885974358974355,
+    "source_std": 4.425764269063427,
+    "reference_mean": 18.184704074074073,
+    "reference_std": 3.7601237799710585,
+    "mean_shift": -3.701270284900282
+  },
+  {
+    "feature": "RPDE",
+    "applied": true,
+    "source_mean": 0.4985355384615385,
+    "source_std": 0.10394171413073468,
+    "reference_mean": 0.2740331481481481,
+    "reference_std": 0.20798077098910592,
+    "mean_shift": -0.22450239031339037
+  },
+  {
+    "feature": "DFA",
+    "applied": true,
+    "source_mean": 0.7180990461538461,
+    "source_std": 0.0553358303465968,
+    "reference_mean": 0.3737377777777778,
+    "reference_std": 0.23487331060106512,
+    "mean_shift": -0.34436126837606834
+  },
+  {
+    "feature": "spread1",
+    "applied": true,
+    "source_mean": -5.684396743589745,
+    "source_std": 1.090207763740309,
+    "reference_mean": -2.7983674074074076,
+    "reference_std": 0.7868450750011269,
+    "mean_shift": 2.8860293361823373
+  },
+  {
+    "feature": "spread2",
+    "applied": true,
+    "source_mean": 0.22651034871794873,
+    "source_std": 0.08340576262039776,
+    "reference_mean": 0.283812962962963,
+    "reference_std": 0.5023050304971605,
+    "mean_shift": 0.05730261424501426
+  },
+  {
+    "feature": "D2",
+    "applied": true,
+    "source_mean": 2.3818260871794874,
+    "source_std": 0.3827990465461168,
+    "reference_mean": 1.7727770370370375,
+    "reference_std": 0.10936664906133067,
+    "mean_shift": -0.6090490501424499
+  },
+  {
+    "feature": "PPE",
+    "applied": true,
+    "source_mean": 0.20655164102564103,
+    "source_std": 0.09011932248227507,
+    "reference_mean": 0.7404946296296298,
+    "reference_std": 0.23318969777813994,
+    "mean_shift": 0.5339429886039887
+  }
+]

@@ -51,6 +51,7 @@ a {
 
 button,
 input,
+select,
 audio {
   font: inherit;
 }
@@ -343,6 +344,7 @@ code {
 }
 
 .field input,
+.field select,
 .file-input {
   width: 100%;
   padding: 14px 16px;
@@ -353,10 +355,30 @@ code {
 }
 
 .field input:focus,
+.field select:focus,
 .file-input:focus {
   outline: none;
   border-color: rgba(20, 116, 111, 0.46);
   box-shadow: 0 0 0 4px rgba(20, 116, 111, 0.12);
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(20, 116, 111, 0.06);
+  border: 1px solid rgba(20, 116, 111, 0.12);
+}
+
+.checkbox-field input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.compact-field {
+  min-width: min(280px, 100%);
 }
 
 .form-grid {
@@ -511,6 +533,15 @@ code {
   flex-wrap: wrap;
 }
 
+.report-confirm-form {
+  margin-top: 18px;
+}
+
+.report-confirm-status {
+  display: block;
+  flex: 1 1 240px;
+}
+
 .table-actions form,
 .action-row form {
   margin: 0;
@@ -614,6 +645,27 @@ code {
   display: block;
   margin-top: 8px;
   font-size: 1.12rem;
+}
+
+.report-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.meta-chip {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(238, 242, 244, 0.78);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.meta-chip span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.86rem;
+  margin-bottom: 4px;
 }
 
 .details-card {
@@ -736,7 +788,8 @@ audio {
   .dashboard-grid,
   .form-grid,
   .single-mobile,
-  .metric-grid {
+  .metric-grid,
+  .report-meta-grid {
     grid-template-columns: 1fr;
   }
 
