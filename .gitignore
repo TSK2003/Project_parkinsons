@@ -38,7 +38,6 @@ env.bak/
 venv.bak/
 
 # Project specific
-data/
 models/evaluation/
 models/model_metadata.json
 models/prediction_pipeline.pkl

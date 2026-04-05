@@ -1,0 +1,16 @@
+{
+  "labels": [
+    "Healthy",
+    "Parkinson's"
+  ],
+  "matrix": [
+    [
+      21,
+      16
+    ],
+    [
+      9,
+      40
+    ]
+  ]
+}

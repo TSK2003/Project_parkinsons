@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="420" viewBox="0 0 520 420">
+  <rect width="520" height="420" fill="#ffffff" />
+  <text x="260" y="38" text-anchor="middle" font-size="24" font-weight="700" fill="#0f172a">Subject-Level Confusion Matrix</text>
+  <text x="260" y="86" text-anchor="middle" font-size="18" fill="#0f172a">Predicted label</text>
+  <text x="44" y="230" text-anchor="middle" font-size="18" fill="#0f172a" transform="rotate(-90 44 230)">True label</text>
+  <text x="205.0" y="102" text-anchor="middle" font-size="16" fill="#0f172a">Healthy</text><text x="315.0" y="102" text-anchor="middle" font-size="16" fill="#0f172a">Parkinson's</text>
+  <text x="132" y="181.0" text-anchor="end" font-size="16" fill="#0f172a">Healthy</text><text x="132" y="291.0" text-anchor="end" font-size="16" fill="#0f172a">Parkinson's</text>
+  <rect x="150" y="120" width="110" height="110" fill="rgba(20, 116, 111, 0.544)" stroke="#0f172a" stroke-width="1.5" /><text x="205.0" y="183.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">21</text><rect x="260" y="120" width="110" height="110" fill="rgba(20, 116, 111, 0.450)" stroke="#0f172a" stroke-width="1.5" /><text x="315.0" y="183.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">16</text><rect x="150" y="230" width="110" height="110" fill="rgba(20, 116, 111, 0.319)" stroke="#0f172a" stroke-width="1.5" /><text x="205.0" y="293.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">9</text><rect x="260" y="230" width="110" height="110" fill="rgba(20, 116, 111, 0.900)" stroke="#0f172a" stroke-width="1.5" /><text x="315.0" y="293.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">40</text>
+</svg>

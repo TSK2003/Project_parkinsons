@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 
@@ -5,7 +6,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
-from imblearn.over_sampling import SMOTE
+from imblearn.over_sampling import SMOTE, SVMSMOTE
 from sklearn.ensemble import (
     ExtraTreesClassifier,
     GradientBoostingClassifier,
@@ -27,6 +28,11 @@ from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+
+try:
+    from xgboost import XGBClassifier
+except ImportError:
+    XGBClassifier = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DATA_PATH = os.path.join(BASE_DIR, "data", "parkinsons.data")
@@ -82,6 +88,23 @@ FEATURE_SUBSETS = {
         "DFA",
         "PPE",
     ],
+    "paper_15": [
+        "PPE",
+        "MDVP:Fo(Hz)",
+        "Shimmer:APQ3",
+        "D2",
+        "MDVP:Jitter(Abs)",
+        "MDVP:APQ",
+        "MDVP:Fhi(Hz)",
+        "MDVP:RAP",
+        "Shimmer:APQ5",
+        "MDVP:Jitter(%)",
+        "MDVP:Shimmer",
+        "spread2",
+        "DFA",
+        "NHR",
+        "spread1",
+    ],
     "nonlinear_5": ["HNR", "RPDE", "DFA", "D2", "PPE"],
     "robust_8": [
         "MDVP:Jitter(Abs)",
@@ -95,6 +118,10 @@ FEATURE_SUBSETS = {
     ],
     "full_22": ALL_DATASET_FEATURES,
 }
+
+DATASET_CHOICES = ("default", "uci", "merged", "aligned")
+SOURCE_FILTER_CHOICES = ("all", "uci", "figshare")
+RESAMPLER_CHOICES = ("smote", "svmsmote", "none")
 
 
 def build_pipeline(classifier) -> Pipeline:
@@ -139,7 +166,7 @@ def build_candidate_configs() -> list[dict]:
             voting="soft",
         )
 
-    return [
+    candidates = [
         {
             "name": "nonlinear_5_extra_trees",
             "feature_set": "nonlinear_5",
@@ -226,6 +253,20 @@ def build_candidate_configs() -> list[dict]:
             ),
         },
         {
+            "name": "paper_15_extra_trees",
+            "feature_set": "paper_15",
+            "features": FEATURE_SUBSETS["paper_15"],
+            "model_name": "ExtraTreesClassifier",
+            "build_estimator": lambda: build_pipeline(
+                ExtraTreesClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1,
+                )
+            ),
+        },
+        {
             "name": "robust_8_extra_trees",
             "feature_set": "robust_8",
             "features": FEATURE_SUBSETS["robust_8"],
@@ -280,6 +321,101 @@ def build_candidate_configs() -> list[dict]:
             ),
         },
     ]
+
+    if XGBClassifier is not None:
+        candidates.append(
+            {
+                "name": "paper_15_xgboost",
+                "feature_set": "paper_15",
+                "features": FEATURE_SUBSETS["paper_15"],
+                "model_name": "XGBClassifier",
+                "build_estimator": lambda: build_pipeline(
+                    XGBClassifier(
+                        n_estimators=250,
+                        max_depth=4,
+                        learning_rate=0.05,
+                        subsample=0.9,
+                        colsample_bytree=0.9,
+                        reg_lambda=1.0,
+                        objective="binary:logistic",
+                        eval_metric="logloss",
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1,
+                    )
+                ),
+            }
+        )
+
+    return candidates
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train and evaluate the Parkinson's screening model."
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=DATASET_CHOICES,
+        default="default",
+        help=(
+            "Dataset to use: default prefers aligned merged, then merged, then UCI; "
+            "uci uses only the original UCI data; merged uses raw merged data; "
+            "aligned uses the aligned merged data."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-candidate",
+        default=None,
+        help=(
+            "Optional candidate name to lock evaluation and final training to a single "
+            "model configuration, for example robust_8_extra_trees."
+        ),
+    )
+    parser.add_argument(
+        "--source-filter",
+        choices=SOURCE_FILTER_CHOICES,
+        default="all",
+        help=(
+            "Optional row filter based on record source. "
+            "Use 'figshare' for WAV-derived rows only, 'uci' for original UCI rows only, "
+            "or 'all' to keep every row in the selected dataset."
+        ),
+    )
+    parser.add_argument(
+        "--resampler",
+        choices=RESAMPLER_CHOICES,
+        default="smote",
+        help=(
+            "Class-balancing strategy inside each training fold. "
+            "Use 'svmsmote' to mirror the paper more closely, 'smote' for the current baseline, "
+            "or 'none' to disable synthetic oversampling."
+        ),
+    )
+    return parser.parse_args()
+
+
+def resolve_candidate_configs(fixed_candidate_name: str | None) -> list[dict]:
+    if fixed_candidate_name == "paper_15_xgboost" and XGBClassifier is None:
+        raise ValueError(
+            "Candidate 'paper_15_xgboost' requires the optional xgboost package. "
+            "Install it with `pip install xgboost` and retry."
+        )
+
+    candidate_configs = build_candidate_configs()
+    if not fixed_candidate_name:
+        return candidate_configs
+
+    filtered = [
+        candidate
+        for candidate in candidate_configs
+        if candidate["name"] == fixed_candidate_name
+    ]
+    if not filtered:
+        available = ", ".join(candidate["name"] for candidate in candidate_configs)
+        raise ValueError(
+            f"Unknown candidate '{fixed_candidate_name}'. Available candidates: {available}"
+        )
+    return filtered
 
 
 def validate_feature_subsets(feature_names: list[str]) -> None:
@@ -390,15 +526,57 @@ def tune_threshold(subject_probabilities: pd.DataFrame) -> dict:
     return best
 
 
-def fit_estimator_with_smote(
+def resample_training_data(
+    train_subset: pd.DataFrame,
+    y_train: pd.Series,
+    resampler_name: str,
+):
+    if resampler_name == "none":
+        return train_subset, y_train
+
+    class_counts = y_train.value_counts()
+    if len(class_counts) < 2:
+        return train_subset, y_train
+
+    minority_count = int(class_counts.min())
+    if minority_count <= 1:
+        return train_subset, y_train
+
+    k_neighbors = max(1, min(5, minority_count - 1))
+
+    if resampler_name == "smote":
+        sampler = SMOTE(random_state=RANDOM_STATE, k_neighbors=k_neighbors)
+        return sampler.fit_resample(train_subset, y_train)
+
+    if resampler_name == "svmsmote":
+        m_neighbors = max(1, min(10, minority_count - 1))
+        try:
+            sampler = SVMSMOTE(
+                random_state=RANDOM_STATE,
+                k_neighbors=k_neighbors,
+                m_neighbors=m_neighbors,
+            )
+            return sampler.fit_resample(train_subset, y_train)
+        except ValueError:
+            fallback = SMOTE(random_state=RANDOM_STATE, k_neighbors=k_neighbors)
+            return fallback.fit_resample(train_subset, y_train)
+
+    raise ValueError(f"Unsupported resampler: {resampler_name}")
+
+
+def fit_estimator_with_resampling(
     candidate: dict,
     X_train: pd.DataFrame,
     y_train: pd.Series,
+    resampler_name: str,
 ):
     estimator = candidate["build_estimator"]()
     train_subset = X_train[candidate["features"]]
-    smote = SMOTE(random_state=RANDOM_STATE)
-    X_train_res, y_train_res = smote.fit_resample(train_subset, y_train)
+    X_train_res, y_train_res = resample_training_data(
+        train_subset,
+        y_train,
+        resampler_name,
+    )
     estimator.fit(X_train_res, y_train_res)
     return estimator
 
@@ -408,6 +586,7 @@ def evaluate_candidate_with_inner_cv(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     groups_train: pd.Series,
+    resampler_name: str,
 ) -> dict:
     inner_cv = StratifiedGroupKFold(
         n_splits=INNER_SPLITS,
@@ -425,7 +604,12 @@ def evaluate_candidate_with_inner_cv(
         inner_X_valid = X_train.iloc[inner_valid_index]
         inner_y_valid = y_train.iloc[inner_valid_index]
 
-        estimator = fit_estimator_with_smote(candidate, inner_X_train, inner_y_train)
+        estimator = fit_estimator_with_resampling(
+            candidate,
+            inner_X_train,
+            inner_y_train,
+            resampler_name,
+        )
         probabilities = estimator.predict_proba(
             inner_X_valid[candidate["features"]]
         )[:, 1]
@@ -641,7 +825,13 @@ def relative_path(path: str) -> str:
     return os.path.relpath(path, BASE_DIR)
 
 
-def resolve_dataset_path() -> str:
+def resolve_dataset_path(dataset_choice: str) -> str:
+    if dataset_choice == "uci":
+        return DEFAULT_DATA_PATH
+    if dataset_choice == "merged":
+        return MERGED_DATA_PATH
+    if dataset_choice == "aligned":
+        return ALIGNED_MERGED_DATA_PATH
     if os.path.exists(ALIGNED_MERGED_DATA_PATH):
         return ALIGNED_MERGED_DATA_PATH
     if os.path.exists(MERGED_DATA_PATH):
@@ -649,15 +839,32 @@ def resolve_dataset_path() -> str:
     return DEFAULT_DATA_PATH
 
 
+def apply_source_filter(df: pd.DataFrame, source_filter: str) -> pd.DataFrame:
+    if source_filter == "all":
+        return df.copy()
+
+    is_figshare = df["name"].astype(str).str.startswith("figshare_")
+    if source_filter == "figshare":
+        return df.loc[is_figshare].copy()
+    if source_filter == "uci":
+        return df.loc[~is_figshare].copy()
+
+    raise ValueError(f"Unsupported source filter: {source_filter}")
+
+
 def main() -> None:
+    args = parse_args()
     print("=" * 72)
     print("Parkinson's Disease Training Pipeline - Subset + Threshold Tuning")
     print("=" * 72)
 
     print("\n[1/7] Loading dataset and deriving subject groups...")
-    dataset_path = resolve_dataset_path()
+    dataset_path = resolve_dataset_path(args.dataset)
     print(f"Using dataset          : {dataset_path}")
+    print(f"Dataset selector       : {args.dataset}")
     df = pd.read_csv(dataset_path)
+    df = apply_source_filter(df, args.source_filter)
+    print(f"Source filter          : {args.source_filter}")
     df["subject_id"] = extract_subject_ids(df["name"])
     subject_status = df.groupby("subject_id")["status"].first()
 
@@ -666,6 +873,7 @@ def main() -> None:
     print(f"Subject count          : {subject_status.shape[0]}")
     print(f"Healthy subjects       : {int((subject_status == 0).sum())}")
     print(f"Parkinson's subjects   : {int((subject_status == 1).sum())}")
+    print(f"Resampler              : {args.resampler}")
 
     feature_names = [column for column in df.columns if column not in {"name", "status", "subject_id"}]
     validate_feature_subsets(feature_names)
@@ -673,7 +881,15 @@ def main() -> None:
     y = df["status"]
     groups = df["subject_id"]
 
-    candidate_configs = build_candidate_configs()
+    candidate_configs = resolve_candidate_configs(args.fixed_candidate)
+    print(
+        "Candidate selection    : "
+        + (
+            args.fixed_candidate
+            if args.fixed_candidate
+            else "auto search across configured candidates"
+        )
+    )
 
     print("\n[2/7] Running nested grouped validation with threshold tuning...")
     outer_cv = StratifiedGroupKFold(
@@ -699,14 +915,25 @@ def main() -> None:
 
         candidate_results = []
         for candidate in candidate_configs:
-            result = evaluate_candidate_with_inner_cv(candidate, X_train, y_train, groups_train)
+            result = evaluate_candidate_with_inner_cv(
+                candidate,
+                X_train,
+                y_train,
+                groups_train,
+                args.resampler,
+            )
             candidate_results.append(result)
 
         best_candidate = max(candidate_results, key=lambda item: candidate_rank(item["inner_subject_metrics"]))
         estimator_template = next(
             candidate for candidate in candidate_configs if candidate["name"] == best_candidate["candidate_name"]
         )
-        final_fold_estimator = fit_estimator_with_smote(estimator_template, X_train, y_train)
+        final_fold_estimator = fit_estimator_with_resampling(
+            estimator_template,
+            X_train,
+            y_train,
+            args.resampler,
+        )
         test_probabilities = final_fold_estimator.predict_proba(X_test[best_candidate["features"]])[:, 1]
 
         for recording_name, subject_id, y_true, pd_probability in zip(
@@ -820,7 +1047,7 @@ def main() -> None:
     final_candidate_results = []
     for candidate in candidate_configs:
         final_candidate_results.append(
-            evaluate_candidate_with_inner_cv(candidate, X, y, groups)
+            evaluate_candidate_with_inner_cv(candidate, X, y, groups, args.resampler)
         )
 
     final_choice = max(
@@ -830,7 +1057,12 @@ def main() -> None:
     final_config = next(
         candidate for candidate in candidate_configs if candidate["name"] == final_choice["candidate_name"]
     )
-    final_estimator = fit_estimator_with_smote(final_config, X, y)
+    final_estimator = fit_estimator_with_resampling(
+        final_config,
+        X,
+        y,
+        args.resampler,
+    )
 
     print(f"Best candidate          : {final_choice['candidate_name']}")
     print(f"Feature set             : {final_choice['feature_set']}")
@@ -849,7 +1081,7 @@ def main() -> None:
     joblib.dump(final_choice["features"], selected_features_path)
 
     metadata = {
-        "training_mode": "subject_grouped_subset_threshold_tuning_with_smote",
+        "training_mode": f"subject_grouped_subset_threshold_tuning_with_{args.resampler}",
         "scoring_metric": "balanced_accuracy_with_pd_recall_floor",
         "sklearn_version": sklearn.__version__,
         "dataset_path_used": relative_path(dataset_path),
@@ -858,6 +1090,17 @@ def main() -> None:
         "decision_threshold": round(float(final_choice["threshold"]), 4),
         "target_pd_recall": TARGET_PD_RECALL,
         "target_balanced_accuracy": TARGET_BALANCED_ACCURACY,
+        "dataset_selector": args.dataset,
+        "source_filter": args.source_filter,
+        "resampler": args.resampler,
+        "candidate_selection_mode": (
+            "fixed_candidate" if args.fixed_candidate else "auto_search"
+        ),
+        "fixed_candidate": args.fixed_candidate,
+        "uses_gender_specific_extraction": False,
+        "optional_dependencies": {
+            "xgboost_available": XGBClassifier is not None,
+        },
         "best_candidate": final_choice["candidate_name"],
         "feature_set_name": final_choice["feature_set"],
         "best_classifier": final_choice["model_name"],

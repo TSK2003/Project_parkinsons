@@ -6,6 +6,7 @@ from datetime import datetime
 from functools import wraps
 
 import joblib
+import librosa
 import numpy as np
 import pandas as pd
 import sklearn
@@ -39,6 +40,16 @@ MODEL_METADATA_PATH = os.path.join(MODELS_DIR, "model_metadata.json")
 ALL_FEATURES = list(ALL_FEATURE_NAMES)
 ALLOWED_GENDERS = {"male", "female", "unspecified"}
 ALLOWED_CLINICIAN_LABELS = {"confirmed_pd", "confirmed_healthy", "unconfirmed"}
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".flac",
+    ".mp4",
+    ".webm",
+}
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "parkinsons-portal-dev-key")
@@ -62,6 +73,7 @@ CORS(app)
 model_metadata = {}
 selected_model_features = ALL_FEATURES
 prediction_threshold = 0.5
+uses_gender_specific_extraction = False
 
 
 def force_single_thread_inference(estimator) -> None:
@@ -80,6 +92,9 @@ if os.path.exists(MODEL_METADATA_PATH):
         model_metadata = json.load(handle)
     selected_model_features = model_metadata.get("selected_features", ALL_FEATURES)
     prediction_threshold = float(model_metadata.get("decision_threshold", 0.5))
+    uses_gender_specific_extraction = bool(
+        model_metadata.get("uses_gender_specific_extraction", False)
+    )
 
 if not os.path.exists(MODEL_PIPELINE_PATH):
     raise FileNotFoundError(
@@ -116,6 +131,52 @@ def normalize_clinician_label(label: str | None) -> str:
         return "unconfirmed"
     cleaned = label.strip().lower()
     return cleaned if cleaned in ALLOWED_CLINICIAN_LABELS else ""
+
+
+def ensure_supported_audio_file(filename: str) -> None:
+    _, ext = os.path.splitext(filename or "")
+    suffix = ext.lower() or ".wav"
+    if suffix not in SUPPORTED_AUDIO_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
+        raise ValueError(
+            f"Unsupported audio format '{suffix}'. Please upload one of: {allowed}."
+        )
+
+
+def normalize_audio_for_analysis(audio_path: str) -> tuple[str, list[str]]:
+    _, ext = os.path.splitext(audio_path)
+    suffix = ext.lower() or ".wav"
+
+    if suffix == ".wav":
+        return audio_path, []
+
+    if suffix not in SUPPORTED_AUDIO_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
+        raise ValueError(
+            f"Unsupported audio format '{suffix}'. Please upload one of: {allowed}."
+        )
+
+    try:
+        audio_data, sample_rate = librosa.load(audio_path, sr=None, mono=False)
+    except Exception as exc:
+        raise ValueError(
+            "The uploaded audio could not be decoded. Please try WAV, MP3, M4A, AAC, OGG, FLAC, MP4, or WebM."
+        ) from exc
+
+    if sample_rate is None or int(sample_rate) <= 0:
+        raise ValueError("The uploaded audio file does not have a valid sample rate.")
+
+    if getattr(audio_data, "ndim", 1) > 1:
+        audio_data = np.mean(audio_data, axis=0)
+
+    audio_data = np.asarray(audio_data, dtype=np.float32)
+    if audio_data.size == 0 or not np.isfinite(audio_data).all():
+        raise ValueError("The uploaded audio file could not be normalized for analysis.")
+
+    audio_data = np.clip(audio_data, -1.0, 1.0)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        wavfile.write(temp_file.name, int(sample_rate), audio_data)
+        return temp_file.name, [temp_file.name]
 
 
 def get_db() -> sqlite3.Connection:
@@ -579,25 +640,33 @@ def infer_prediction(feature_frame):
 
 
 def run_prediction(audio_path: str, gender: str | None = None) -> dict:
-    features_dict = extract_features(audio_path, gender=gender)
-    feature_frame = pd.DataFrame(
-        [{name: features_dict[name] for name in ALL_FEATURES}],
-        columns=ALL_FEATURES,
-    )
-    prediction, probabilities = infer_prediction(feature_frame)
+    cleanup_paths = []
+    try:
+        normalized_audio_path, cleanup_paths = normalize_audio_for_analysis(audio_path)
+        extraction_gender = normalize_gender(gender) if uses_gender_specific_extraction else None
+        features_dict = extract_features(normalized_audio_path, gender=extraction_gender)
+        feature_frame = pd.DataFrame(
+            [{name: features_dict[name] for name in ALL_FEATURES}],
+            columns=ALL_FEATURES,
+        )
+        prediction, probabilities = infer_prediction(feature_frame)
 
-    healthy_probability = float(probabilities[0])
-    parkinsons_probability = float(probabilities[1])
-    return {
-        "prediction": prediction,
-        "label": "Parkinson's Detected" if prediction == 1 else "Healthy",
-        "probabilities": {
-            "healthy": round(healthy_probability, 4),
-            "parkinsons": round(parkinsons_probability, 4),
-        },
-        "confidence_gap": round(abs(parkinsons_probability - healthy_probability), 4),
-        "features": features_dict,
-    }
+        healthy_probability = float(probabilities[0])
+        parkinsons_probability = float(probabilities[1])
+        return {
+            "prediction": prediction,
+            "label": "Parkinson's Detected" if prediction == 1 else "Healthy",
+            "probabilities": {
+                "healthy": round(healthy_probability, 4),
+                "parkinsons": round(parkinsons_probability, 4),
+            },
+            "confidence_gap": round(abs(parkinsons_probability - healthy_probability), 4),
+            "features": features_dict,
+        }
+    finally:
+        for path in cleanup_paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 def split_audio_segments(audio_path: str):
@@ -715,11 +784,16 @@ def assess_report_quality(
 
 
 def analyze_voice_sample(audio_path: str, gender: str | None = None) -> dict:
-    segment_paths, cleanup_paths = split_audio_segments(audio_path)
+    cleanup_paths = []
     segment_results = []
     skipped_segments = []
 
     try:
+        normalized_audio_path, normalization_cleanup_paths = normalize_audio_for_analysis(audio_path)
+        cleanup_paths.extend(normalization_cleanup_paths)
+        segment_paths, segment_cleanup_paths = split_audio_segments(normalized_audio_path)
+        cleanup_paths.extend(segment_cleanup_paths)
+
         for index, segment_path in enumerate(segment_paths, start=1):
             try:
                 segment_result = run_prediction(segment_path, gender=gender)
@@ -732,12 +806,6 @@ def analyze_voice_sample(audio_path: str, gender: str | None = None) -> dict:
             if skipped_segments:
                 raise ValueError(skipped_segments[0]["reason"])
             raise ValueError("The uploaded audio could not be analyzed.")
-
-        if len(segment_results) < app.config["MIN_VALID_SEGMENTS"]:
-            raise ValueError(
-                f"At least {app.config['MIN_VALID_SEGMENTS']} valid voice segments are required for analysis. "
-                "Please record a longer, steadier sample in a quiet room."
-            )
 
         weights = [max(item.get("confidence_gap", 0.01), 0.01) for item in segment_results]
         parkinsons_probability = float(
@@ -985,6 +1053,10 @@ def doctor_create_patient_report(patient_id: int):
     audio_file = request.files["audio"]
     if audio_file.filename == "":
         return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     consented_for_training = request.form.get("consent_training") == "1"
 
     filename = secure_filename(audio_file.filename) or "voice_sample.wav"
@@ -1025,6 +1097,10 @@ def create_report():
     audio_file = request.files["audio"]
     if audio_file.filename == "":
         return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     consented_for_training = request.form.get("consent_training") == "1"
 
     filename = secure_filename(audio_file.filename) or "voice_sample.wav"
@@ -1117,6 +1193,12 @@ def stream_chunk():
         return jsonify({"error": "No audio chunk supplied.", "skip": True}), 200
 
     audio_file = request.files["audio"]
+    if audio_file.filename == "":
+        return jsonify({"error": "No audio chunk supplied.", "skip": True}), 200
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "skip": True}), 200
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(audio_file.filename)) as temp:
         audio_file.save(temp.name)
         temp_path = temp.name
@@ -1140,6 +1222,12 @@ def analyze_voice():
         return jsonify({"error": "No audio file uploaded."}), 400
 
     audio_file = request.files["audio"]
+    if audio_file.filename == "":
+        return jsonify({"error": "Please choose an audio file before analyzing."}), 400
+    try:
+        ensure_supported_audio_file(audio_file.filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix(audio_file.filename)) as temp:
         audio_file.save(temp.name)
         temp_path = temp.name

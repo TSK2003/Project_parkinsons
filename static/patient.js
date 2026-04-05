@@ -17,9 +17,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const TARGET_SAMPLE_RATE = 44100
   const MAX_RECORDING_MS = 10000
-  const MIN_CLIENT_DURATION_SECONDS = 6
+  const HARD_MIN_DURATION_SECONDS = 2
+  const RECOMMENDED_DURATION_SECONDS = 8
   const MIN_CLIENT_RMS = 0.003
   const MAX_CLIENT_CLIPPED_FRACTION = 0.01
+  const SUPPORTED_FILE_EXTENSIONS = [".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".webm"]
 
   let stream = null
   let recorder = null
@@ -288,9 +290,9 @@ document.addEventListener("DOMContentLoaded", () => {
     return ""
   }
 
-  function isWavFile(file) {
+  function isSupportedAudioFile(file) {
     const lowerName = (file.name || "").toLowerCase()
-    return lowerName.endsWith(".wav") || file.type === "audio/wav" || file.type === "audio/x-wav"
+    return SUPPORTED_FILE_EXTENSIONS.some((extension) => lowerName.endsWith(extension))
   }
 
   async function decodeAudioBlob(blob) {
@@ -372,11 +374,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function evaluateAudioMetrics(metrics) {
-    if (metrics.duration < MIN_CLIENT_DURATION_SECONDS) {
+    if (metrics.duration < HARD_MIN_DURATION_SECONDS) {
       return {
         blocking: true,
         tone: "error",
-        message: "Please capture at least 6 seconds of a steady 'Ahh' so the model can compare multiple voice windows.",
+        message: "Please capture at least 2 seconds of a steady 'Ahh' so the server has enough signal to analyze.",
       }
     }
 
@@ -393,6 +395,14 @@ document.addEventListener("DOMContentLoaded", () => {
         blocking: true,
         tone: "error",
         message: "The recording sounds clipped or distorted. Lower the microphone gain and record again.",
+      }
+    }
+
+    if (metrics.duration < RECOMMENDED_DURATION_SECONDS) {
+      return {
+        blocking: false,
+        tone: "warning",
+        message: "This recording is shorter than the recommended 8 to 10 seconds. The server can still analyze it, but a longer sample usually improves reliability.",
       }
     }
 
@@ -516,9 +526,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   fileInput.addEventListener("change", async () => {
     if (fileInput.files.length > 0) {
-      if (!isWavFile(fileInput.files[0])) {
+      if (!isSupportedAudioFile(fileInput.files[0])) {
         fileInput.value = ""
-        setStatus("Please choose a WAV file. Browser recordings are already converted to WAV automatically.", "error")
+        setStatus("Please choose a supported audio file: WAV, MP3, M4A, AAC, OGG, FLAC, MP4, or WebM.", "error")
         return
       }
       recordedBlob = null
@@ -538,8 +548,8 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatus("Please upload an audio file or record a voice sample first.", "error")
       return
     }
-    if (selectedFile && !isWavFile(selectedFile)) {
-      setStatus("Please upload a WAV file for reliable segmentation and analysis.", "error")
+    if (selectedFile && !isSupportedAudioFile(selectedFile)) {
+      setStatus("Please upload a supported audio file: WAV, MP3, M4A, AAC, OGG, FLAC, MP4, or WebM.", "error")
       return
     }
 
