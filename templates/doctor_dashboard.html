@@ -8,7 +8,7 @@
       <span class="eyebrow">Doctor dashboard</span>
       <h1>Doctor Portal</h1>
       <p class="muted">
-        Create patient IDs, review saved voice reports, and open any patient record to upload or record a new screening sample.
+        Review patient details, open saved voice reports, and record or upload a new screening sample when needed.
       </p>
     </div>
     <div class="hero-stats">
@@ -25,66 +25,6 @@
         <strong>{{ patient_summaries|selectattr("report_count")|list|length }}</strong>
       </div>
     </div>
-  </section>
-
-  <section class="dashboard-grid">
-    <article class="panel-card">
-      <span class="eyebrow">Patient onboarding</span>
-      <h2>Create a new patient ID</h2>
-      <p class="muted">
-        The portal generates the patient ID from the first 4 letters of the patient's name and the last 4 digits of the mobile number. You choose the patient password here.
-      </p>
-
-      <form method="post" action="{{ url_for('doctor_create_patient') }}" class="stack-form">
-        <div class="form-grid single-mobile">
-          <label class="field">
-            <span>Patient full name</span>
-            <input type="text" name="full_name" placeholder="Enter patient name" required>
-          </label>
-
-          <label class="field">
-            <span>Mobile number</span>
-            <input type="text" name="mobile_number" inputmode="numeric" pattern="[0-9\\s\\-\\+]{10,}" placeholder="Enter mobile number" required>
-          </label>
-
-          <label class="field">
-            <span>Gender</span>
-            <select name="gender">
-              <option value="unspecified" selected>Unspecified</option>
-              <option value="male">Male</option>
-              <option value="female">Female</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Password</span>
-            <input type="password" name="password" placeholder="Create patient password" minlength="6" required>
-          </label>
-
-          <label class="field">
-            <span>Confirm password</span>
-            <input type="password" name="confirm_password" placeholder="Confirm patient password" minlength="6" required>
-          </label>
-        </div>
-
-        <div class="inline-status is-working">
-          Example: <code>Naveen Kumar</code> with <code>9876543210</code> becomes patient ID <code>nave3210</code>. The patient will use that ID and the password you set here to log in.
-        </div>
-
-        <button class="btn btn-primary" type="submit">Create Patient ID</button>
-      </form>
-    </article>
-
-    <article class="panel-card">
-      <span class="eyebrow">Recording guidance</span>
-      <h2>Capture cleaner screening audio</h2>
-      <ul class="feature-list">
-        <li>Use a quiet room and keep the phone close to the patient.</li>
-        <li>Record a steady 8 to 10 second sustained "Ahh".</li>
-        <li>The live waveform should move while the patient is speaking.</li>
-        <li>Retake any sample marked low confidence or retake recommended.</li>
-      </ul>
-    </article>
   </section>
 
   <section class="panel-card">
@@ -106,7 +46,7 @@
             <th>Reports</th>
             <th>Latest verdict</th>
             <th>Latest PD probability</th>
-            <th>Action</th>
+            <th>Patient record</th>
           </tr>
         </thead>
         <tbody>
@@ -125,15 +65,12 @@
               <td>
                 <div class="table-actions">
                   <a class="text-link" href="{{ url_for('doctor_patient_detail', patient_id=patient.id) }}">Open patient</a>
-                  <form method="post" action="{{ url_for('doctor_delete_patient', patient_id=patient.id) }}" onsubmit="return confirm('Remove this patient and all saved reports?');">
-                    <button class="btn btn-danger btn-compact" type="submit">Remove</button>
-                  </form>
                 </div>
               </td>
             </tr>
           {% else %}
             <tr>
-              <td colspan="8" class="empty-row">No patients have been created yet.</td>
+              <td colspan="8" class="empty-row">No patients have registered yet.</td>
             </tr>
           {% endfor %}
         </tbody>
