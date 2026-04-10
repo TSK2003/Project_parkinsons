@@ -891,18 +891,60 @@ def health():
     return jsonify(
         {
             "status": "ok",
-            "message": "Doctor-managed patient portal with patient login is running.",
+            "message": "Patient self-registration portal with doctor review is running.",
         }
     )
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    flash(
-        "Patient self-registration has been removed. Use the patient ID and password created by the doctor.",
-        "info",
-    )
-    return redirect(url_for("patient_login"))
+    if g.user is not None:
+        if g.user["role"] == "doctor":
+            return redirect(url_for("doctor_dashboard"))
+        return redirect(url_for("patient_dashboard"))
+
+    if request.method == "POST":
+        full_name = request.form.get("full_name", "").strip()
+        mobile_number = request.form.get("mobile_number", "").strip()
+        gender = normalize_gender(request.form.get("gender"))
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not full_name or not mobile_number or not password:
+            flash("Full name, mobile number, and password are required.", "error")
+            return render_template("register.html")
+
+        if password != confirm_password:
+            flash("Password and confirm password must match.", "error")
+            return render_template("register.html")
+
+        try:
+            patient = create_patient_record(
+                full_name,
+                mobile_number,
+                password,
+                gender=gender,
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return render_template("register.html")
+        except sqlite3.IntegrityError:
+            flash(
+                "Could not create the account because that generated patient ID already exists.",
+                "error",
+            )
+            return render_template("register.html")
+
+        flash(
+            (
+                f"Account created successfully. Your patient ID is {patient['username']}. "
+                "Use that ID and your password to log in."
+            ),
+            "success",
+        )
+        return redirect(url_for("patient_login"))
+
+    return render_template("register.html")
 
 
 def process_login(role: str):
@@ -965,40 +1007,11 @@ def patient_dashboard():
 @app.route("/doctor/patients/create", methods=["POST"])
 @login_required(role="doctor")
 def doctor_create_patient():
-    full_name = request.form.get("full_name", "").strip()
-    mobile_number = request.form.get("mobile_number", "").strip()
-    gender = normalize_gender(request.form.get("gender"))
-    password = request.form.get("password", "")
-    confirm_password = request.form.get("confirm_password", "")
-
-    if not full_name or not mobile_number or not password:
-        flash("Patient name, mobile number, and password are required.", "error")
-        return redirect(url_for("doctor_dashboard"))
-
-    if password != confirm_password:
-        flash("Patient password and confirm password must match.", "error")
-        return redirect(url_for("doctor_dashboard"))
-
-    try:
-        patient = create_patient_record(full_name, mobile_number, password, gender=gender)
-    except ValueError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("doctor_dashboard"))
-    except sqlite3.IntegrityError:
-        flash(
-            "Could not create the patient because that generated ID already exists.",
-            "error",
-        )
-        return redirect(url_for("doctor_dashboard"))
-
     flash(
-        (
-            f"Patient created successfully. Patient ID: {patient['username']}. "
-            "The patient can now log in with this ID and the password you created."
-        ),
-        "success",
+        "Patient accounts can now be created only from the patient Create Account page.",
+        "info",
     )
-    return redirect(url_for("doctor_patient_detail", patient_id=patient["id"]))
+    return redirect(url_for("doctor_dashboard"))
 
 
 @app.route("/doctor/dashboard")

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Create Patient Account{% endblock %}
+
+{% block content %}
+  <section class="auth-wrap">
+    <article class="auth-card wide">
+      <span class="eyebrow">Patient access</span>
+      <h1>Create Account</h1>
+      <p class="muted">
+        Create your patient account here. The portal will generate your patient ID from your name and mobile number, and you will use that ID with your password to log in.
+      </p>
+
+      <form method="post" class="stack-form">
+        <div class="form-grid single-mobile">
+          <label class="field">
+            <span>Full name</span>
+            <input type="text" name="full_name" placeholder="Enter your full name" required>
+          </label>
+
+          <label class="field">
+            <span>Mobile number</span>
+            <input type="text" name="mobile_number" inputmode="numeric" pattern="[0-9\\s\\-\\+]{10,}" placeholder="Enter your mobile number" required>
+          </label>
+
+          <label class="field">
+            <span>Gender</span>
+            <select name="gender">
+              <option value="unspecified" selected>Unspecified</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Password</span>
+            <input type="password" name="password" placeholder="Create password" minlength="6" required>
+          </label>
+
+          <label class="field">
+            <span>Confirm password</span>
+            <input type="password" name="confirm_password" placeholder="Confirm password" minlength="6" required>
+          </label>
+        </div>
+
+        <div class="inline-status is-working">
+          Example: <code>Naveen Kumar</code> with <code>9876543210</code> becomes patient ID <code>nave3210</code>.
+        </div>
+
+        <button class="btn btn-primary btn-block" type="submit">Create Account</button>
+      </form>
+
+      <p class="auth-footnote">
+        Already have an account?
+        <a class="text-link" href="{{ url_for('patient_login') }}">Back to Patient Login</a>
+      </p>
+    </article>
+  </section>
+{% endblock %}
