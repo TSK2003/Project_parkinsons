@@ -22,10 +22,21 @@ This project has been tested primarily with a local virtual environment in `.ven
 
 ## First-Time Setup on a New Laptop
 
-After cloning the repository, open PowerShell in the project root and run:
+After cloning the repository, change into the repository folder first, then run:
 
 ```powershell
-python -m venv .venv
+cd Project_parkinsons
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+If you want to recreate the virtual environment from scratch later, run this from the same folder:
+
+```powershell
+if (Test-Path .venv) { Remove-Item -Recurse -Force .venv }
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
@@ -279,6 +290,14 @@ You are probably using the wrong Python interpreter. Activate the virtual enviro
 python --version
 ```
 
+This project currently targets Python `3.11`. On Windows, the safest way to create the environment is:
+
+```powershell
+py -3.11 -m venv .venv
+```
+
+If you create the environment with Python `3.13`, packages such as `numpy==1.26.4` may try to build from source and fail with compiler errors like `Unknown compiler(s)` or missing `cl`.
+
 ### `Primary model not found at models/prediction_pipeline.pkl`
 
 Train the production model first:
@@ -308,3 +327,11 @@ $env:LOKY_MAX_CPU_COUNT="8"
 - Training pipeline: `train_model.py`
 - Merge pipeline: `merge_datasets.py`
 - Verification helper: `verify_setup.py`
+
+cd D:\New folder\Project_parkinsons
+
+pow shell
+cd "D:\New folder\Project_parkinsons"
+& "..\.venv\Scripts\Activate.ps1"
+$env:LOKY_MAX_CPU_COUNT="8"
+python app.py

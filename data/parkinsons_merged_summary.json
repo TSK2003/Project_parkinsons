@@ -1,7 +1,7 @@
 {
-  "base_dataset_path": "D:\\AESCION\\Work\\Projects\\Naveen\\Project\\data\\parkinsons.data",
-  "merged_dataset_path": "D:\\AESCION\\Work\\Projects\\Naveen\\Project\\data\\parkinsons_merged.data",
-  "aligned_merged_dataset_path": "D:\\AESCION\\Work\\Projects\\Naveen\\Project\\data\\parkinsons_merged_aligned.data",
+  "base_dataset_path": "D:\\New folder\\Project_parkinsons\\data\\parkinsons.data",
+  "merged_dataset_path": "D:\\New folder\\Project_parkinsons\\data\\parkinsons_merged.data",
+  "aligned_merged_dataset_path": "D:\\New folder\\Project_parkinsons\\data\\parkinsons_merged_aligned.data",
   "base_row_count": 195,
   "base_pd_rows": 147,
   "base_healthy_rows": 48,
@@ -13,7 +13,7 @@
   "aligned_merged_row_count": 249,
   "aligned_merged_pd_rows": 172,
   "aligned_merged_healthy_rows": 77,
-  "calibration_stats_path": "D:\\AESCION\\Work\\Projects\\Naveen\\Project\\data\\parkinsons_alignment_stats.json",
+  "calibration_stats_path": "D:\\New folder\\Project_parkinsons\\data\\parkinsons_alignment_stats.json",
   "calibrated_feature_count": 22,
   "skipped_file_count": 27,
   "skipped_files": [

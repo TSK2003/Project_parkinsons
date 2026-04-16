@@ -157,9 +157,9 @@
     "applied": true,
     "source_mean": 0.7180990461538461,
     "source_std": 0.0553358303465968,
-    "reference_mean": 0.3737377777777778,
-    "reference_std": 0.23487331060106512,
-    "mean_shift": -0.34436126837606834
+    "reference_mean": 0.37992962962962973,
+    "reference_std": 0.23151677415053057,
+    "mean_shift": -0.3381694165242164
   },
   {
     "feature": "spread1",
